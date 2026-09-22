@@ -1,0 +1,38 @@
+# --- Internal planning docs & mockups: never pushed to GitHub ---
+/docs/
+/mockups/
+/AGENTS.md
+AGENTS.md
+AGENTS.md.bak
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Python (ingestion/, scoring/, api/) ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# --- Node / Next.js (dashboard/) ---
+node_modules/
+.next/
+out/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Logs ---
+*.log
