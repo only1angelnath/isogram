@@ -35,4 +35,4 @@ Thumbs.db
 .idea/
 
 # --- Logs ---
-*.log
+*.logsupabase/.temp/
