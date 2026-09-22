@@ -57,7 +57,11 @@ DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 
 # Don't process more than this many blocks in one run — keeps each cron
 # invocation short and bounds how much work is lost if a run fails partway.
-MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "500"))
+# 100 is conservative: measured processing speed (~0.3-0.5 blocks/sec,
+# sequential per-tx receipt calls) is well below Arc's real ~2 blocks/sec,
+# so the worker currently cannot keep pace with the chain in real time.
+# See docs/BUGS.md for the tracked fix (batch RPC receipt calls).
+MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "100"))
 
 
 def get_web3() -> Web3:

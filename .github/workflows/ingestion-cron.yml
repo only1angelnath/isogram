@@ -12,7 +12,7 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 4  # a run should never approach the next cron tick
+    timeout-minutes: 10  # 100 blocks at ~0.3-0.5 blocks/sec needs up to ~6min; see docs/BUGS.md
     steps:
       - uses: actions/checkout@v4
 
