@@ -16,6 +16,7 @@ Requires TELEGRAM_BOT_TOKEN and ISOGRAM_API_BASE_URL (see .env.example).
 
 import logging
 import os
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -110,7 +111,45 @@ def build_application() -> Application:
     return app
 
 
+def get_webhook_base_url() -> Optional[str]:
+    """
+    Render sets RENDER_EXTERNAL_URL automatically on every web service — no
+    manual config needed there. WEBHOOK_BASE_URL is a manual override for
+    any other host. Returns None for local dev, which is the polling-mode
+    signal (see run()) — nothing to configure locally, it just works.
+    """
+    return os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("WEBHOOK_BASE_URL")
+
+
+def run(application: Application) -> None:
+    """
+    Free-tier background workers no longer exist on Render/Railway — only
+    free web services, which idle down and wake on an incoming HTTP request.
+    Long-polling (run_polling) needs a persistent process, so it doesn't fit
+    that shape; webhooks do, since Telegram just POSTs to us whenever a
+    message arrives; that POST is what wakes an idled free web service back
+    up. Locally (no webhook base URL configured), fall back to polling,
+    which is simpler for development and doesn't need a public URL at all.
+    """
+    webhook_base_url = get_webhook_base_url()
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+
+    if webhook_base_url:
+        port = int(os.environ.get("PORT", "10000"))
+        # The bot token doubles as an unguessable URL path — anyone who
+        # doesn't know the token can't POST fake updates to this endpoint.
+        webhook_url = f"{webhook_base_url.rstrip('/')}/{token}"
+        logger.info("Isogram bot starting (webhook mode) at %s", webhook_url)
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=token,
+            webhook_url=webhook_url,
+        )
+    else:
+        logger.info("Isogram bot starting (polling mode, local dev)...")
+        application.run_polling()
+
+
 if __name__ == "__main__":
-    application = build_application()
-    logger.info("Isogram bot starting (polling)...")
-    application.run_polling()
+    run(build_application())
