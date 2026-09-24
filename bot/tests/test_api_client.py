@@ -80,3 +80,57 @@ async def test_network_failure_raises_api_error():
     async with _client_with(handler) as client:
         with pytest.raises(ApiError):
             await get_score(client, "isogram")
+
+
+@pytest.mark.asyncio
+async def test_cold_start_502_retries_then_succeeds(monkeypatch):
+    import api_client
+
+    monkeypatch.setattr(api_client, "COLD_START_RETRY_DELAYS_SECONDS", [0, 0, 0])
+
+    calls = {"count": 0}
+
+    def handler(request):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return httpx.Response(502)
+        return httpx.Response(200, json={"id": "isogram", "score": 0.8})
+
+    async with _client_with(handler) as client:
+        data = await get_score(client, "isogram")
+
+    assert data["score"] == 0.8
+    assert calls["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_cold_start_502_exhausts_retries_raises_api_error(monkeypatch):
+    import api_client
+
+    monkeypatch.setattr(api_client, "COLD_START_RETRY_DELAYS_SECONDS", [0, 0])
+
+    def handler(request):
+        return httpx.Response(502)
+
+    async with _client_with(handler) as client:
+        with pytest.raises(ApiError, match="cold-starting"):
+            await get_score(client, "isogram")
+
+
+@pytest.mark.asyncio
+async def test_404_does_not_trigger_cold_start_retries(monkeypatch):
+    import api_client
+
+    monkeypatch.setattr(api_client, "COLD_START_RETRY_DELAYS_SECONDS", [999])  # would hang the test if hit
+
+    calls = {"count": 0}
+
+    def handler(request):
+        calls["count"] += 1
+        return httpx.Response(404)
+
+    async with _client_with(handler) as client:
+        data = await get_score(client, "does-not-exist")
+
+    assert data is None
+    assert calls["count"] == 1  # no retry loop entered for a real 404

@@ -1,0 +1,27 @@
+name: keep-api-warm
+
+# Render's free-tier web services spin down after ~15 minutes of no traffic
+# and return 502 Bad Gateway (not just a slow response) to the next request
+# while waking back up — this caused real "API didn't respond" failures in
+# the Telegram bot in production. Pinging /health every 10 minutes (well
+# under that 15-minute window) keeps the API from ever going idle, at $0
+# extra cost since this reuses the same free GitHub Actions cron mechanism
+# as ingestion-cron.yml and scoring-cron.yml.
+#
+# This complements, not replaces, the retry-with-backoff already in
+# bot/api_client.py — that still protects against the rare case this ping
+# schedule doesn't fully prevent (a burst of Render's own maintenance
+# restarts, a redeploy, etc.).
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping API health endpoint
+        run: |
+          curl -sf --max-time 30 "${{ secrets.ISOGRAM_API_BASE_URL }}/health" || \
+          echo "Ping failed or API was cold-starting — this is expected occasionally, not a failure to act on."

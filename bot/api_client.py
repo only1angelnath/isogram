@@ -8,6 +8,7 @@ returns the parsed JSON (or raises ApiError). Message formatting lives in
 commands.py, kept separate so it's testable without any network calls.
 """
 
+import asyncio
 import os
 from typing import Optional
 
@@ -17,6 +18,15 @@ DEFAULT_TIMEOUT_SECONDS = 30
 # 30s, not 10s: Render's free-tier web services (the API) spin down after
 # ~15 minutes idle and can take 20-30s to wake back up on the next request.
 # A short timeout here would misreport a cold start as a real API outage.
+
+# Render's free tier returns 502 Bad Gateway WHILE the container is still
+# booting from a cold start (not a slow-but-eventually-correct response) —
+# confirmed in production: the exact same request that 502'd immediately
+# succeeded a few seconds later once the container finished waking up. A
+# short retry-with-backoff rides out that window automatically so the user
+# never sees it, instead of failing on the first try and telling them to
+# retry manually.
+COLD_START_RETRY_DELAYS_SECONDS = [2, 5, 10]
 
 
 class ApiError(Exception):
@@ -31,16 +41,32 @@ def get_api_base_url() -> str:
 
 
 async def _get_json(client: httpx.AsyncClient, path: str) -> dict:
-    try:
-        resp = await client.get(path, timeout=DEFAULT_TIMEOUT_SECONDS)
-    except httpx.HTTPError as exc:
-        raise ApiError(f"Could not reach the Isogram API: {exc}") from exc
+    last_error: Optional[str] = None
 
-    if resp.status_code == 404:
-        return None
-    if resp.status_code >= 400:
-        raise ApiError(f"Isogram API returned {resp.status_code} for {path}")
-    return resp.json()
+    for attempt, delay_before in enumerate([0] + COLD_START_RETRY_DELAYS_SECONDS):
+        if delay_before:
+            await asyncio.sleep(delay_before)
+
+        try:
+            resp = await client.get(path, timeout=DEFAULT_TIMEOUT_SECONDS)
+        except httpx.HTTPError as exc:
+            raise ApiError(f"Could not reach the Isogram API: {exc}") from exc
+
+        if resp.status_code == 404:
+            return None
+        if resp.status_code in (502, 503):
+            # Cold-start signature (see COLD_START_RETRY_DELAYS_SECONDS) —
+            # worth another try, not an immediate failure.
+            last_error = f"{resp.status_code} for {path}"
+            continue
+        if resp.status_code >= 400:
+            raise ApiError(f"Isogram API returned {resp.status_code} for {path}")
+        return resp.json()
+
+    raise ApiError(
+        f"Isogram API still returning {last_error} after retrying — "
+        "likely still cold-starting; try again shortly."
+    )
 
 
 async def get_project(client: httpx.AsyncClient, project_id: str) -> Optional[dict]:
