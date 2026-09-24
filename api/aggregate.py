@@ -78,6 +78,33 @@ def top_by_metric(summaries: list[dict], metric: str, limit: int) -> list[dict]:
     return scored[:limit]
 
 
+def build_network_summary(projects: list[dict], score_rows: list[dict], network_stats_row: Optional[dict]) -> dict:
+    """
+    Network-wide stat-strip data (docs/BRANDING.md §5). total_projects and
+    total_scored come from the same project/score data every other route
+    already reads; total_tvl_usd is a simple sum across current latest
+    scores (no new pipeline data needed — TVL is already per-project).
+    total_volume_7d / total_tx_7d / total_unique_users_7d come from
+    network_stats (see db.fetch_network_stats), which IS new pipeline
+    output — None on every one of those fields if the scoring job hasn't
+    run yet, never a fabricated 0 (docs/BUGS.md #3).
+    """
+    summaries = build_all_summaries(projects, score_rows)
+    total_scored = sum(1 for s in summaries if s["score"] is not None)
+    tvl_values = [s["tvl_usd"] for s in summaries if s["tvl_usd"] is not None]
+    total_tvl_usd = sum(tvl_values) if tvl_values else None
+
+    return {
+        "total_projects": len(projects),
+        "total_scored": total_scored,
+        "total_tvl_usd": total_tvl_usd,
+        "total_volume_7d": _to_float(network_stats_row["total_volume_7d"]) if network_stats_row else None,
+        "total_tx_7d": network_stats_row.get("total_tx_7d") if network_stats_row else None,
+        "total_unique_users_7d": network_stats_row.get("total_unique_users_7d") if network_stats_row else None,
+        "computed_at": network_stats_row.get("computed_at") if network_stats_row else None,
+    }
+
+
 def render_badge_svg(project_name: str, score: Optional[float]) -> str:
     """
     Render a minimal shields.io-style SVG badge. Falls back to an honest

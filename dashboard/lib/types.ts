@@ -19,3 +19,15 @@ export interface ProjectDetail extends ProjectSummary {
   contracts: string[];
   created_at: string | null;
 }
+
+// Mirrors api/models.py's NetworkStats — the dashboard's stat-strip data.
+// Deliberately no market cap (see supabase/migrations/20260924080000_network_stats.sql).
+export interface NetworkStats {
+  total_projects: number;
+  total_scored: number;
+  total_tvl_usd: number | null;
+  total_volume_7d: number | null;
+  total_tx_7d: number | null;
+  total_unique_users_7d: number | null;
+  computed_at: string | null;
+}

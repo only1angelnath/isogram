@@ -49,13 +49,14 @@ def fetch_gas_events_since(client: Client, since_iso: str) -> list[dict]:
 
 def fetch_token_flows_since(client: Client, since_iso: str) -> list[dict]:
     """
-    token_flows rows with ts >= since_iso. Used for unique_users_7d — see
-    docs/decisions/ADR-002-scoring-formula.md for why this comes from
-    token_flows rather than gas_events (which has no sender column).
+    token_flows rows with ts >= since_iso. Used for unique_users_7d (see
+    docs/decisions/ADR-002-scoring-formula.md) and, network-wide, for
+    total_volume_7d (usd_value) — see compute_scores.py's
+    build_network_stats().
     """
     result = (
         client.table("token_flows")
-        .select("token_address, from_address, to_address, amount, ts")
+        .select("token_address, from_address, to_address, amount, usd_value, ts")
         .gte("ts", since_iso)
         .execute()
     )
@@ -86,3 +87,12 @@ def upsert_project_scores(client: Client, rows: list[dict]) -> None:
     if not rows:
         return
     client.table("project_scores").insert(rows).execute()
+
+
+def upsert_network_stats(client: Client, row: dict) -> None:
+    """
+    Overwrite the single network_stats row (id=1) with this run's totals —
+    a live snapshot, not a history (unlike project_scores). See
+    supabase/migrations/20260924080000_network_stats.sql.
+    """
+    client.table("network_stats").upsert({**row, "id": 1}).execute()

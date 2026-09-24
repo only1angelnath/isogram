@@ -11,24 +11,27 @@ export function Nav() {
           Isogram
         </Link>
         <nav className="nav-links">
-          <Link href="/">Projects</Link>
+          <Link href="/projects">Projects</Link>
           <Link href="/gas">Gas leaderboard</Link>
         </nav>
+        <Link href="/projects" className="btn">
+          Explore live data
+        </Link>
       </div>
     </div>
   );
 }
 
-// Minimal inline rendering of the "ascending shard" mark described in
-// docs/BRANDING.md §2.1 — two overlapping triangles, cream + coral, bases
-// flush against the container bottom. Kept as inline SVG rather than an
-// image asset so it's crisp at this small nav size without shipping a
-// separate file.
+// Full "ascending shard" mark, per docs/BRANDING.md §2.1 — two overlapping
+// triangular shards (taller coral spike breaking through a shorter cream
+// one), bases flush against a rounded-square container. Inline SVG so it
+// stays crisp at nav size without a separate asset file.
 function ShardIcon() {
   return (
-    <svg width="16" height="12" viewBox="0 0 16 12" fill="none">
-      <path d="M0 12 L6 2 L9 8 L2 12 Z" fill="#f2f0ea" />
-      <path d="M6 12 L11 0 L16 12 Z" fill="#ff5b2e" />
+    <svg viewBox="0 0 28 28" width="28" height="28">
+      <rect width="28" height="28" rx="7" fill="#101012" />
+      <path d="M6 22 L12 6 L16 15 L10 22 Z" fill="#f2f0ea" />
+      <path d="M13 22 L20 4 L24 22 Z" fill="#ff5b2e" />
     </svg>
   );
 }

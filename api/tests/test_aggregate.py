@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from aggregate import (
     build_all_summaries,
+    build_network_summary,
     build_project_summary,
     latest_score_by_project,
     render_badge_svg,
@@ -108,3 +109,58 @@ def test_render_badge_svg_no_score_falls_back_honestly():
     svg = render_badge_svg("Brand New Project", None)
     assert "insufficient data" in svg
     assert "0.00" not in svg
+
+
+def test_build_network_summary_with_full_data():
+    projects = [
+        {"id": "a", "name": "A", "category": "dex"},
+        {"id": "b", "name": "B", "category": "infra"},
+    ]
+    scores = [
+        _score("a", "2026-09-24T00:00:00+00:00", score="0.5", tvl_usd="100"),
+        _score("b", "2026-09-24T00:00:00+00:00", score="0.8", tvl_usd="50"),
+    ]
+    network_stats_row = {
+        "total_volume_7d": "1234.5",
+        "total_tx_7d": 42,
+        "total_unique_users_7d": 7,
+        "computed_at": "2026-09-24T00:00:00+00:00",
+    }
+    summary = build_network_summary(projects, scores, network_stats_row)
+
+    assert summary["total_projects"] == 2
+    assert summary["total_scored"] == 2
+    assert summary["total_tvl_usd"] == 150.0  # summed across both projects
+    assert summary["total_volume_7d"] == 1234.5
+    assert summary["total_tx_7d"] == 42
+    assert summary["total_unique_users_7d"] == 7
+
+
+def test_build_network_summary_no_network_stats_row_yet_is_null_not_zero():
+    # Scoring job hasn't run since network_stats was added — must not show
+    # a fabricated 0 for volume/tx/users (docs/BUGS.md #3), even though
+    # total_projects/total_scored are still real (they come from data that
+    # already exists independent of network_stats).
+    projects = [{"id": "a", "name": "A", "category": "dex"}]
+    scores = [_score("a", "2026-09-24T00:00:00+00:00", score="0.5", tvl_usd="100")]
+    summary = build_network_summary(projects, scores, None)
+
+    assert summary["total_projects"] == 1
+    assert summary["total_scored"] == 1
+    assert summary["total_tvl_usd"] == 100.0
+    assert summary["total_volume_7d"] is None
+    assert summary["total_tx_7d"] is None
+    assert summary["total_unique_users_7d"] is None
+
+
+def test_build_network_summary_unscored_project_excluded_from_tvl_sum():
+    projects = [
+        {"id": "a", "name": "A", "category": "dex"},
+        {"id": "quiet", "name": "Quiet", "category": "infra"},
+    ]
+    scores = [_score("a", "2026-09-24T00:00:00+00:00", score="0.5", tvl_usd="100")]
+    summary = build_network_summary(projects, scores, None)
+
+    assert summary["total_projects"] == 2
+    assert summary["total_scored"] == 1
+    assert summary["total_tvl_usd"] == 100.0  # quiet's null TVL doesn't zero out the sum

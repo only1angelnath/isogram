@@ -28,3 +28,22 @@ class ProjectDetail(ProjectSummary):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class NetworkStats(BaseModel):
+    """
+    Network-wide totals for the dashboard's stat strip (docs/BRANDING.md
+    §5). Deliberately excludes market cap — see
+    supabase/migrations/20260924080000_network_stats.sql's comment on why
+    that's a separate, not-yet-built feature (needs a price oracle + supply
+    tracking, and doesn't mean much for the currently-tracked stablecoins
+    and Uniswap v4, which has no token on Arc).
+    """
+
+    total_projects: int
+    total_scored: int
+    total_tvl_usd: Optional[float] = None
+    total_volume_7d: Optional[float] = None
+    total_tx_7d: Optional[int] = None
+    total_unique_users_7d: Optional[int] = None
+    computed_at: Optional[str] = None

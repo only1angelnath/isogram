@@ -29,6 +29,7 @@ from db import (
     fetch_projects,
     fetch_token_flows_since,
     get_client,
+    upsert_network_stats,
     upsert_project_scores,
 )
 from scoring import compute_score, contract_age_bonus
@@ -131,18 +132,58 @@ def compute_all_scores(metrics: dict[str, dict], computed_at: datetime) -> list[
     return rows
 
 
+def build_network_stats(gas_events_7d: list[dict], token_flows_7d: list[dict], computed_at: datetime) -> dict:
+    """
+    Pure function: network-wide totals for the dashboard's stat strip
+    (docs/BRANDING.md §5). Deliberately NOT per-project — this is chain-wide
+    activity, computed independent of which contracts are tracked as
+    "projects", since gas gets paid and tokens move on Arc regardless of
+    whether we've identified the project behind a given contract yet.
+
+    total_volume_7d only sums usd_value for flows where it's set (priced
+    tokens only — see ingestion/worker.py's USD_PEGGED_1_TO_1) — an unpriced
+    token's raw `amount` is never added into a USD total, that would silently
+    mix units.
+    """
+    total_volume_7d = sum(
+        (Decimal(str(flow["usd_value"])) for flow in token_flows_7d if flow.get("usd_value") is not None),
+        Decimal("0"),
+    )
+    total_tx_7d = len(gas_events_7d)
+    unique_users_7d = len({
+        (flow.get("from_address") or "").lower()
+        for flow in token_flows_7d
+        if flow.get("from_address")
+    })
+
+    return {
+        "total_volume_7d": str(total_volume_7d),
+        "total_tx_7d": total_tx_7d,
+        "total_unique_users_7d": unique_users_7d,
+        "computed_at": computed_at.isoformat(),
+    }
+
+
 def run():
     client = get_client()
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=SCORE_WINDOW_DAYS)).isoformat()
+
+    # Fetched before the "any projects?" check below — chain-wide gas/flow
+    # activity exists independent of which contracts we've identified as
+    # tracked projects, so network_stats should reflect it either way.
+    gas_events_7d = fetch_gas_events_since(client, since)
+    token_flows_7d = fetch_token_flows_since(client, since)
+
+    network_stats = build_network_stats(gas_events_7d, token_flows_7d, now)
+    upsert_network_stats(client, network_stats)
+    print(f"Updated network_stats: {network_stats}")
 
     projects = fetch_projects(client)
     if not projects:
         print("No tracked projects yet. Nothing to score.")
         return
 
-    gas_events_7d = fetch_gas_events_since(client, since)
-    token_flows_7d = fetch_token_flows_since(client, since)
     all_token_flows = fetch_all_token_flows(client)
 
     metrics = build_project_metrics(projects, gas_events_7d, token_flows_7d, all_token_flows, now)

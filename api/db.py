@@ -68,3 +68,20 @@ def fetch_latest_scores_for_project(client: Client, project_id: str) -> list[dic
         .execute()
     )
     return result.data or []
+
+
+def fetch_network_stats(client: Client) -> dict | None:
+    """
+    The single network_stats row (see
+    supabase/migrations/20260924080000_network_stats.sql). None if the
+    scoring job hasn't run yet — never fabricate zeros for a run that
+    hasn't happened (same docs/BUGS.md #3 discipline as everything else).
+    """
+    result = (
+        client.table("network_stats")
+        .select("total_volume_7d, total_tx_7d, total_unique_users_7d, computed_at")
+        .eq("id", 1)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None

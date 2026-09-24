@@ -10,7 +10,7 @@
 // <img src> for badge embeds (components/ScoreBadge.tsx) — no client-side
 // fetch of it ever happens.
 
-import { ProjectDetail, ProjectSummary } from "./types";
+import { NetworkStats, ProjectDetail, ProjectSummary } from "./types";
 
 function getApiBaseUrl(): string {
   const url = process.env.API_BASE_URL;
@@ -51,6 +51,10 @@ export async function getProject(projectId: string): Promise<ProjectDetail | nul
 export async function getGasLeaderboard(limit = 25): Promise<ProjectSummary[]> {
   const data = await getJson<ProjectSummary[]>(`/gas/top?limit=${limit}`);
   return data ?? [];
+}
+
+export async function getNetworkStats(): Promise<NetworkStats | null> {
+  return getJson<NetworkStats>("/stats");
 }
 
 export function getApiBaseUrlForBadge(): string {

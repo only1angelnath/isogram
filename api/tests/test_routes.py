@@ -169,6 +169,45 @@ def test_badge_svg_project_not_found(client, monkeypatch):
     assert resp.status_code == 404
 
 
+def test_stats_endpoint(client, monkeypatch):
+    import routes.network as network_route
+
+    monkeypatch.setattr(network_route, "fetch_projects", lambda c: PROJECTS)
+    monkeypatch.setattr(network_route, "fetch_all_latest_scores", lambda c: SCORES)
+    monkeypatch.setattr(
+        network_route,
+        "fetch_network_stats",
+        lambda c: {
+            "total_volume_7d": "999.5",
+            "total_tx_7d": 10,
+            "total_unique_users_7d": 3,
+            "computed_at": "2026-09-22T00:00:00+00:00",
+        },
+    )
+
+    resp = client.get("/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_projects"] == 2
+    assert body["total_scored"] == 1  # only "isogram" has a score row in SCORES
+    assert body["total_tvl_usd"] == 500.0
+    assert body["total_volume_7d"] == 999.5
+
+
+def test_stats_endpoint_no_network_stats_yet_returns_nulls(client, monkeypatch):
+    import routes.network as network_route
+
+    monkeypatch.setattr(network_route, "fetch_projects", lambda c: PROJECTS)
+    monkeypatch.setattr(network_route, "fetch_all_latest_scores", lambda c: SCORES)
+    monkeypatch.setattr(network_route, "fetch_network_stats", lambda c: None)
+
+    resp = client.get("/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_volume_7d"] is None
+    assert body["total_tx_7d"] is None
+
+
 def test_no_route_accepts_a_write():
     """
     Per docs/AUDIT.md: this is a read-only public data service. Confirm no
