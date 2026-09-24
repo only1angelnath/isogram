@@ -50,9 +50,11 @@ class FakeW3:
 
 
 USDC_ADDRESS = "0x3600000000000000000000000000000000000000"
+EURC_ADDRESS = "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1"
+USYC_ADDRESS = "0x8a5d989bbb96929f689b0200f435f53da42bf490"
 
 
-def _make_transfer_log(from_addr_hex40: str, to_addr_hex40: str, raw_amount: int):
+def _make_transfer_log(from_addr_hex40: str, to_addr_hex40: str, raw_amount: int, token_address: str = USDC_ADDRESS):
     # Topics are 32 bytes; an address occupies the low 20 bytes (40 hex chars),
     # left-padded with zeros in the high 12 bytes (24 hex chars).
     assert len(from_addr_hex40) == 40, "test fixture bug: address must be exactly 40 hex chars"
@@ -60,7 +62,7 @@ def _make_transfer_log(from_addr_hex40: str, to_addr_hex40: str, raw_amount: int
     topic_from = "0x" + "0" * 24 + from_addr_hex40
     topic_to = "0x" + "0" * 24 + to_addr_hex40
     return {
-        "address": USDC_ADDRESS,
+        "address": token_address,
         "topics": [FakeHex(TRANSFER_EVENT_TOPIC), FakeHex(topic_from), FakeHex(topic_to)],
         "data": FakeHex(hex(raw_amount)),
     }
@@ -112,6 +114,7 @@ def test_process_block_decodes_gas_and_transfer():
     assert tf["from_address"] == "0x" + FROM_ADDR
     assert tf["to_address"] == "0x" + TO_ADDR
     assert tf["amount"] == "5"
+    assert tf["usd_value"] == "5"
     assert tf["block_number"] == 100
 
 
@@ -157,3 +160,77 @@ def test_process_block_ignores_untracked_token_logs():
 
     _, token_flows = process_block(w3, block_number=5, contract_project_map={})
     assert token_flows == []
+
+
+def test_process_block_decodes_eurc_transfer_but_leaves_usd_value_null():
+    """
+    Regression test: EURC was seeded as a project from day one but was NOT
+    in TRACKED_TOKENS until this fix — its Transfer events were silently
+    never decoded, and TVL was USDC-only as a result. EURC transfers must
+    now decode, but usd_value must stay None (EURC is EUR-pegged, not
+    USD-pegged — pricing it at 1:1 USD would be a real quality-of-data bug,
+    not a fix).
+    """
+    tx_hash = "0xeeeeee"
+    contract_address = "0x7777777777777777777777777777777777777"
+
+    block = {
+        "timestamp": 1_726_000_000,
+        "transactions": [
+            {"hash": FakeHex(tx_hash), "to": contract_address, "gasPrice": 1_000_000_000}
+        ],
+    }
+    receipt = {
+        "gasUsed": 21000,
+        "effectiveGasPrice": 1_000_000_000,
+        "logs": [
+            _make_transfer_log(
+                from_addr_hex40=FROM_ADDR,
+                to_addr_hex40=TO_ADDR,
+                raw_amount=2_500_000,  # 2.5 EURC at 6 decimals
+                token_address=EURC_ADDRESS,
+            )
+        ],
+    }
+    w3 = FakeW3(block, {tx_hash: receipt})
+
+    _, token_flows = process_block(w3, block_number=200, contract_project_map={})
+
+    assert len(token_flows) == 1
+    tf = token_flows[0]
+    assert tf["token_address"] == EURC_ADDRESS
+    assert tf["amount"] == "2.5"
+    assert tf["usd_value"] is None
+
+
+def test_process_block_decodes_usyc_transfer_with_usd_value():
+    tx_hash = "0xfffff0"
+    contract_address = "0x6666666666666666666666666666666666666"
+
+    block = {
+        "timestamp": 1_726_000_000,
+        "transactions": [
+            {"hash": FakeHex(tx_hash), "to": contract_address, "gasPrice": 1_000_000_000}
+        ],
+    }
+    receipt = {
+        "gasUsed": 21000,
+        "effectiveGasPrice": 1_000_000_000,
+        "logs": [
+            _make_transfer_log(
+                from_addr_hex40=FROM_ADDR,
+                to_addr_hex40=TO_ADDR,
+                raw_amount=1_000_000,  # 1 USYC at 6 decimals
+                token_address=USYC_ADDRESS,
+            )
+        ],
+    }
+    w3 = FakeW3(block, {tx_hash: receipt})
+
+    _, token_flows = process_block(w3, block_number=201, contract_project_map={})
+
+    assert len(token_flows) == 1
+    tf = token_flows[0]
+    assert tf["token_address"] == USYC_ADDRESS
+    assert tf["amount"] == "1"
+    assert tf["usd_value"] == "1"

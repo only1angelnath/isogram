@@ -3,7 +3,7 @@
 /mockups/
 /AGENTS.md
 AGENTS.md
-AGENTS.md.bak
+/dump_codebase.sh
 
 # --- Environment / secrets ---
 .env
@@ -36,3 +36,4 @@ Thumbs.db
 
 # --- Logs ---
 *.logsupabase/.temp/
+*.log

@@ -1,0 +1,184 @@
+/* globals.css — tokens copied directly from docs/BRANDING.md §3-4. This is
+   the one file in the dashboard where those values should live; every
+   component reads them via CSS variables rather than hardcoding hex codes
+   again, so a future brand tweak only touches this file. */
+
+:root {
+  --color-bg: #101012;
+  --color-panel: #17171a;
+  --color-ink: #f2f0ea;
+  --color-ink-dim: #8f8d86;
+  --color-accent: #ff5b2e; /* coral — gas metric, primary CTAs */
+  --color-data-2: #5fc9c0; /* verdigris — volume/TVL, never a CTA */
+  --color-border: #26262a;
+
+  --font-body: "Archivo", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
+
+/* Headlines: heavy weight, mixed case (never uppercase), tight tracking —
+   per docs/BRANDING.md §4. */
+h1,
+h2,
+h3 {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0;
+}
+
+/* All data — numbers, stat labels, chart captions — renders in the mono
+   face, per docs/BRANDING.md §4. Applied via this class rather than
+   globally, since headings and body copy stay in Archivo. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.container {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.nav {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+}
+
+.nav-links {
+  display: flex;
+  gap: 24px;
+  font-size: 0.9rem;
+}
+
+.nav-links a {
+  text-decoration: none;
+  color: var(--color-ink-dim);
+}
+
+.nav-links a:hover,
+.nav-links a:focus-visible {
+  color: var(--color-ink);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--color-ink);
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+.shard-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #101012;
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 3px;
+  flex-shrink: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-ink-dim);
+  font-weight: 500;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+td {
+  padding: 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.95rem;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.row-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-ink-dim);
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 500;
+}
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--color-ink-dim);
+}
+
+.no-data {
+  color: var(--color-ink-dim);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  tbody tr {
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+}

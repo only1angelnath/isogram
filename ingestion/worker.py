@@ -42,9 +42,18 @@ ARC_MAINNET_RPC = os.environ.get("ARC_RPC_URL", "https://rpc.mainnet.arc.io")
 ARC_CHAIN_ID = 5042
 
 # Tracked tokens and their decimals (see docs/architecture_essentials.md).
-# Extend this as more projects/tokens are seeded into `projects`.
+# All three are the tokens seeded in the `projects` table by the initial
+# migration (supabase/migrations/20260921114348_init_schema.sql) — a token's
+# Transfer events are only worth decoding here once it's also a project we
+# can attribute flows to, and once scoring/tvl.py can price it (see
+# scoring/tvl.py's PRICED_TOKENS, which must stay in sync with this dict).
+# EURC and USYC were seeded as projects from day one but were NOT actually
+# being decoded here until now — TVL was silently USDC-only as a result.
+# Extend this further as more projects/tokens are seeded into `projects`.
 TRACKED_TOKENS = {
     "0x3600000000000000000000000000000000000000": {"symbol": "USDC", "decimals": 6},
+    "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1": {"symbol": "EURC", "decimals": 6},
+    "0x8a5d989bbb96929f689b0200f435f53da42bf490": {"symbol": "USYC", "decimals": 6},
 }
 
 # ERC-20 Transfer(address,address,uint256) event topic0.
@@ -62,6 +71,15 @@ DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 # so the worker currently cannot keep pace with the chain in real time.
 # See docs/BUGS.md for the tracked fix (batch RPC receipt calls).
 MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "100"))
+
+# usd_value is only populated for tokens we can currently price at 1:1 USD.
+# EURC is EUR-pegged, not USD-pegged — pricing it at 1:1 USD here would be
+# wrong in a way that's easy to miss downstream (scoring/tvl.py makes the
+# same simplification deliberately and documents it; this dict does not,
+# because a wrong per-transfer usd_value is worse than a missing one).
+# USYC is USD-denominated but not necessarily exactly 1:1 in practice; treated
+# as 1:1 for v1 alongside USDC, consistent with scoring/tvl.py's PRICED_TOKENS.
+USD_PEGGED_1_TO_1 = {"USDC", "USYC"}
 
 
 def get_web3() -> Web3:
@@ -123,7 +141,7 @@ def process_block(w3: Web3, block_number: int, contract_project_map: dict):
                 "from_address": from_addr,
                 "to_address": to_addr,
                 "amount": str(amount),
-                "usd_value": str(amount) if token_info["symbol"] == "USDC" else None,
+                "usd_value": str(amount) if token_info["symbol"] in USD_PEGGED_1_TO_1 else None,
                 "block_number": block_number,
                 "ts": block_ts,
             })

@@ -1,0 +1,30 @@
+name: scoring-cron
+
+# Runs less often than ingestion-cron.yml — scores don't need to be
+# live-live (docs/ARCHITECTURE.md §2.4). Every 4 hours is a starting point,
+# not a tuned value; adjust once there's enough real traffic to know
+# whether that cadence over- or under-serves the badge/dashboard.
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch: {}  # manual trigger for testing
+
+jobs:
+  compute-scores:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scoring
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python compute_scores.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

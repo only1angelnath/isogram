@@ -1,0 +1,5 @@
+supabase>=2.3,<3
+python-dotenv>=1.0,<2
+
+# dev/test only
+pytest>=8.0,<9
