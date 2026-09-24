@@ -13,7 +13,10 @@ from typing import Optional
 
 import httpx
 
-DEFAULT_TIMEOUT_SECONDS = 10
+DEFAULT_TIMEOUT_SECONDS = 30
+# 30s, not 10s: Render's free-tier web services (the API) spin down after
+# ~15 minutes idle and can take 20-30s to wake back up on the next request.
+# A short timeout here would misreport a cold start as a real API outage.
 
 
 class ApiError(Exception):
