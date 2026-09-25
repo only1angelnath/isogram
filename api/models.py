@@ -7,7 +7,7 @@ and documents (via /docs) against these automatically.
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ProjectSummary(BaseModel):
@@ -48,3 +48,42 @@ class NetworkStats(BaseModel):
     total_tx_7d: Optional[int] = None
     total_unique_users_7d: Optional[int] = None
     computed_at: Optional[str] = None
+
+class SubmissionRequest(BaseModel):
+    """POST /submit body — a project owner proposing their project for
+    listing. Every field but contract_address is optional; classification
+    still runs normally on review, this is just a head start / signal."""
+
+    contract_address: str
+    proposed_name: Optional[str] = None
+    proposed_category: Optional[str] = None
+    socials: Optional[dict] = None
+    submitter_contact: Optional[str] = None
+    note: Optional[str] = None
+
+
+class SubmissionResponse(BaseModel):
+    id: int
+    contract_address: str
+    status: str
+    created_at: str
+
+class AdminClassifyRequest(BaseModel):
+    contract_address: str
+    category: str
+    name: Optional[str] = None
+
+
+class AdminReviewRequest(BaseModel):
+    decision: str  # 'approve' or 'reject'
+    category: Optional[str] = None
+    name: Optional[str] = None
+    note: Optional[str] = None
+
+    @field_validator("decision")
+    @classmethod
+    def _decision_valid(cls, v):
+        if v not in ("approve", "reject"):
+            raise ValueError("decision must be 'approve' or 'reject'")
+        return v
+

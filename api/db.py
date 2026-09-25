@@ -11,6 +11,7 @@ import os
 from supabase import Client, create_client
 
 
+
 def get_client() -> Client:
     """
     Build a Supabase client. Prefers the anon/read key over the service key
@@ -85,3 +86,31 @@ def fetch_network_stats(client: Client) -> dict | None:
         .execute()
     )
     return result.data[0] if result.data else None
+
+
+def get_write_client() -> Client:
+    """
+    Build a Supabase client using the service key, for the one route
+    (POST /submit) that needs to write. Never used for reads — reads stay
+    on get_client()'s anon-preferring client, per this module's docstring.
+    """
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
+    if not url or not key:
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_KEY must be set for the write "
+            "client (see .env.example). The anon key cannot write here — "
+            "project_submissions has no anon RLS policy at all."
+        )
+    return create_client(url, key)
+
+
+def insert_submission(client: Client, submission: dict) -> dict:
+    """
+    Insert one row into project_submissions. `submission` must already be
+    validated (see models.SubmissionRequest) — this function does no
+    validation of its own, it just writes what it's given.
+    """
+    result = client.table("project_submissions").insert(submission).execute()
+    return result.data[0] if result.data else {}
+
