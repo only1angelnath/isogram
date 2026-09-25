@@ -186,7 +186,10 @@ def run():
     print(f"Done. Wrote {len(all_gas_events)} gas events, {len(all_token_flows)} token flows. Checkpoint now at {end_block}.")
 
 
+from discovery import run_discovery
+
 if __name__ == "__main__":
     start = time.monotonic()
     run()
+    run_discovery()
     print(f"Finished in {time.monotonic() - start:.1f}s")

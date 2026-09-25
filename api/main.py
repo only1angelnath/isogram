@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import HealthResponse
-from routes import badge, gas, network, projects, scores, tvl
+from routes import badge, gas, network, projects, scores, tvl, submit, admin
 
 app = FastAPI(
     title="Isogram API",
@@ -32,7 +32,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -42,8 +42,8 @@ app.include_router(tvl.router)
 app.include_router(scores.router)
 app.include_router(badge.router)
 app.include_router(network.router)
-
-
+app.include_router(submit.router)
+app.include_router(admin.router)
 @app.get("/", response_model=HealthResponse)
 def root():
     return {"status": "ok"}
