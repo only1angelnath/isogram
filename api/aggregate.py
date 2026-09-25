@@ -94,10 +94,14 @@ def build_network_summary(projects: list[dict], score_rows: list[dict], network_
     tvl_values = [s["tvl_usd"] for s in summaries if s["tvl_usd"] is not None]
     total_tvl_usd = sum(tvl_values) if tvl_values else None
 
+    score_values = [s["score"] for s in summaries if s["score"] is not None]
+    avg_score = (sum(score_values) / len(score_values)) if score_values else None
+
     return {
         "total_projects": len(projects),
         "total_scored": total_scored,
         "total_tvl_usd": total_tvl_usd,
+        "avg_score": avg_score,
         "total_volume_7d": _to_float(network_stats_row["total_volume_7d"]) if network_stats_row else None,
         "total_tx_7d": network_stats_row.get("total_tx_7d") if network_stats_row else None,
         "total_unique_users_7d": network_stats_row.get("total_unique_users_7d") if network_stats_row else None,

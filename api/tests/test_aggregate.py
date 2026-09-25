@@ -131,6 +131,7 @@ def test_build_network_summary_with_full_data():
     assert summary["total_projects"] == 2
     assert summary["total_scored"] == 2
     assert summary["total_tvl_usd"] == 150.0  # summed across both projects
+    assert summary["avg_score"] == 0.65  # mean of 0.5 and 0.8
     assert summary["total_volume_7d"] == 1234.5
     assert summary["total_tx_7d"] == 42
     assert summary["total_unique_users_7d"] == 7
@@ -148,6 +149,7 @@ def test_build_network_summary_no_network_stats_row_yet_is_null_not_zero():
     assert summary["total_projects"] == 1
     assert summary["total_scored"] == 1
     assert summary["total_tvl_usd"] == 100.0
+    assert summary["avg_score"] == 0.5
     assert summary["total_volume_7d"] is None
     assert summary["total_tx_7d"] is None
     assert summary["total_unique_users_7d"] is None
@@ -164,3 +166,10 @@ def test_build_network_summary_unscored_project_excluded_from_tvl_sum():
     assert summary["total_projects"] == 2
     assert summary["total_scored"] == 1
     assert summary["total_tvl_usd"] == 100.0  # quiet's null TVL doesn't zero out the sum
+    assert summary["avg_score"] == 0.5  # only the scored project counts toward the average
+
+
+def test_build_network_summary_no_scored_projects_avg_score_is_null_not_zero():
+    projects = [{"id": "quiet", "name": "Quiet", "category": "infra"}]
+    summary = build_network_summary(projects, [], None)
+    assert summary["avg_score"] is None

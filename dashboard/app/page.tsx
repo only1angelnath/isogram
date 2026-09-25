@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listProjects, getNetworkStats } from "@/lib/api";
 import { ProjectTable } from "@/components/ProjectTable";
+import { ScoreGauge } from "@/components/ScoreGauge";
 import { formatCount, formatUsd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +33,8 @@ export default async function HomePage() {
             <Link href="/projects" className="btn">
               Explore live data
             </Link>
-            <Link href="/gas" className="btn-ghost">
-              Gas leaderboard
+            <Link href="#how-it-works" className="btn-ghost">
+              How it works
             </Link>
           </div>
         </div>
@@ -47,7 +48,7 @@ export default async function HomePage() {
           <div className="mini-metrics">
             <div className="mini">
               <div className="mini-label">
-                USDC gas paid <span>· Arc mainnet</span>
+                Arc gas paid <span>USDC, network-wide (7d)</span>
               </div>
               <svg viewBox="0 0 160 50" width="100%" height="50">
                 <path
@@ -62,7 +63,7 @@ export default async function HomePage() {
             </div>
             <div className="mini">
               <div className="mini-label">
-                Network volume <span>· Arc mainnet</span>
+                Arc volume <span>USD, network-wide (7d)</span>
               </div>
               <svg viewBox="0 0 160 50" width="100%" height="50">
                 <path
@@ -74,6 +75,18 @@ export default async function HomePage() {
                 />
                 <circle className="flow-dot b" r="2.5" />
               </svg>
+            </div>
+            {/* Third mini-metric, per mockups/landing-page.html — was
+                missing entirely before. Real network-average score, same
+                0-1 scale as every other score display in the app (badge,
+                project detail gauge) — the mockup's placeholder showed "82"
+                (0-100 scale) but we keep one consistent scale everywhere
+                rather than rescaling just for this one spot. */}
+            <div className="mini radial-mini">
+              <div className="mini-label">
+                Arc native score <span>network average, live</span>
+              </div>
+              <ScoreGauge score={stats?.avg_score ?? null} size={64} />
             </div>
           </div>
         </div>
@@ -106,42 +119,40 @@ export default async function HomePage() {
         </p>
       </section>
 
-      {/* Pipeline */}
-      <section className="section container tight">
-        <div className="eyebrow">HOW IT WORKS</div>
-        <h2>Ingest → Normalize → Score.</h2>
+      {/* Pipeline — copy matches mockups/landing-page.html verbatim (this
+          is our own product copy, not third-party content; the original
+          wording is more precise than my earlier paraphrase, e.g. it
+          correctly mentions checkpointing, which I'd dropped). */}
+      <section className="section container tight" id="how-it-works">
+        <div className="eyebrow">How the numbers are made</div>
+        <h2>Three steps, one source of truth</h2>
         <p className="lede">
-          Every number on this page traces back to Arc mainnet through
-          exactly three steps — no black box in between.
+          Every figure on Isogram traces back through the same pipeline —
+          nothing purchased from a third-party indexer, nothing estimated.
         </p>
         <div className="pipeline">
           <div className="pipe big">
             <div className="n">01</div>
             <h3>Ingest</h3>
             <p>
-              A worker polls Arc mainnet directly over JSON-RPC
-              (rpc.mainnet.arc.io) — no third-party indexer. It decodes every
-              transaction&apos;s gas paid and every tracked token&apos;s
-              Transfer events straight from the chain.
+              Direct JSON-RPC reads against Arc mainnet, block by block,
+              checkpointed so nothing is missed or duplicated.
             </p>
           </div>
           <div className="pipe">
             <div className="n">02</div>
             <h3>Normalize</h3>
             <p>
-              USDC is Arc&apos;s native gas asset, shown at two decimal
-              resolutions. Every stored amount is converted to one
-              consistent 6-decimal view before it ever reaches a database
-              row.
+              Every USDC amount converted to its 6-decimal view at
+              ingestion — gas and transfers on one consistent scale.
             </p>
           </div>
           <div className="pipe">
             <div className="n">03</div>
             <h3>Score</h3>
             <p>
-              Activity, volume, TVL, and contract age — normalized against
-              every other tracked project and combined into one explainable
-              number, recomputed on a schedule.
+              A published, explainable formula weighing gas, TVL, and
+              activity against what&apos;s actually live on Arc right now.
             </p>
           </div>
         </div>

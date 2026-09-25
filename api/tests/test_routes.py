@@ -191,6 +191,7 @@ def test_stats_endpoint(client, monkeypatch):
     assert body["total_projects"] == 2
     assert body["total_scored"] == 1  # only "isogram" has a score row in SCORES
     assert body["total_tvl_usd"] == 500.0
+    assert body["avg_score"] == 0.8  # only "isogram" scored, so avg == its own score
     assert body["total_volume_7d"] == 999.5
 
 

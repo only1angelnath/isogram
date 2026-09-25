@@ -26,6 +26,7 @@ export interface NetworkStats {
   total_projects: number;
   total_scored: number;
   total_tvl_usd: number | null;
+  avg_score: number | null;
   total_volume_7d: number | null;
   total_tx_7d: number | null;
   total_unique_users_7d: number | null;

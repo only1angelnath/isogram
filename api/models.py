@@ -43,6 +43,7 @@ class NetworkStats(BaseModel):
     total_projects: int
     total_scored: int
     total_tvl_usd: Optional[float] = None
+    avg_score: Optional[float] = None
     total_volume_7d: Optional[float] = None
     total_tx_7d: Optional[int] = None
     total_unique_users_7d: Optional[int] = None
