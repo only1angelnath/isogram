@@ -4,11 +4,15 @@
 /AGENTS.md
 AGENTS.md
 /dump_codebase.sh
+/dump_schema.sh
+schema_dump_*.sql
+/isogram_codebase_dump_*.txt
 
 # --- Environment / secrets ---
 .env
 .env.*
 !.env.example
+.env.local
 
 # --- Python (ingestion/, scoring/, api/) ---
 __pycache__/
@@ -35,5 +39,7 @@ Thumbs.db
 .idea/
 
 # --- Logs ---
-*.logsupabase/.temp/
 *.log
+supabase/.temp/
+.vercel
+.env*
