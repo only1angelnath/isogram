@@ -44,6 +44,90 @@ from decode import (
 ARC_MAINNET_RPC = os.environ.get("ARC_RPC_URL", "https://rpc.mainnet.arc.io")
 ARC_CHAIN_ID = 5042
 
+# --- RPC endpoint pool (2026-09-26) -----------------------------------------
+#
+# rpc.mainnet.arc.io (the free default/shared endpoint) confirmed 429s from
+# GitHub Actions runners while the exact same request succeeded from a
+# residential connection at the same moment — i.e. it's the *source IP*
+# being throttled on that one shared endpoint, not a global outage or a
+# problem with our request rate as such. Arc's own docs say plainly:
+# "Default RPC URLs are shared and may be rate-limited... override with your
+# own provider."
+#
+# So the pool now prefers dedicated, authenticated endpoints (each with its
+# own individual quota, not shared with every other anonymous caller of
+# Arc's public infra) and only falls back to the free shared mirrors as a
+# last resort. Every RPC call rotates through the whole pool in order,
+# trying the next endpoint only after the current one exhausts its own
+# retry/backoff budget (see _call_on_pool below).
+#
+# Dedicated endpoint env vars (set as GitHub Actions secrets — NEVER commit
+# an actual key/URL containing one to the repo):
+#   ALCHEMY_ARC_RPC_URL      e.g. https://arc-mainnet.g.alchemy.com/v2/<key>
+#   DRPC_ARC_RPC_URL         e.g. https://lb.drpc.live/arc/<key>
+#   BLOCKDAEMON_ARC_RPC_URL  e.g. https://svc.blockdaemon.com/arc/mainnet/native
+#   BLOCKDAEMON_API_KEY      sent as `Authorization: Bearer <key>` (Blockdaemon's
+#                            key is not embedded in the URL, unlike the other two)
+#   QUICKNODE_ARC_RPC_URL    e.g. https://<subdomain>.arc-mainnet.quiknode.pro/<token>/
+# Any that aren't set are simply skipped — this all degrades gracefully to
+# just the free mirrors if no keys are configured (e.g. running locally
+# without the secrets exported).
+#
+# ARC_RPC_FALLBACK_URLS (comma-separated) overrides the free-mirror list if
+# Arc adds/removes mirrors later. ARC_RPC_URL (the module-level default,
+# rpc.mainnet.arc.io) is always included as one of the free-mirror fallbacks.
+ARC_RPC_FALLBACK_URLS = [
+    u.strip()
+    for u in os.environ.get(
+        "ARC_RPC_FALLBACK_URLS",
+        "https://rpc.drpc.mainnet.arc.io,"
+        "https://rpc.blockdaemon.mainnet.arc.io,"
+        "https://rpc.quicknode.mainnet.arc.io",
+    ).split(",")
+    if u.strip()
+]
+
+
+def _dedicated_endpoint_specs() -> list:
+    """
+    Build the list of dedicated/authenticated endpoints from env vars, in
+    preference order. Each entry is {"name", "url", "headers"} — headers is
+    None for endpoints that embed their key in the URL itself (Alchemy,
+    dRPC, QuickNode), or a dict for endpoints needing an auth header
+    (Blockdaemon). Only endpoints with the required env var(s) actually set
+    are included.
+    """
+    specs = []
+
+    alchemy_url = os.environ.get("ALCHEMY_ARC_RPC_URL")
+    if alchemy_url:
+        specs.append({"name": "alchemy", "url": alchemy_url, "headers": None})
+
+    drpc_url = os.environ.get("DRPC_ARC_RPC_URL")
+    if drpc_url:
+        specs.append({"name": "drpc-keyed", "url": drpc_url, "headers": None})
+
+    blockdaemon_url = os.environ.get("BLOCKDAEMON_ARC_RPC_URL")
+    blockdaemon_key = os.environ.get("BLOCKDAEMON_API_KEY")
+    if blockdaemon_url and blockdaemon_key:
+        specs.append({
+            "name": "blockdaemon",
+            "url": blockdaemon_url,
+            "headers": {"Authorization": f"Bearer {blockdaemon_key}"},
+        })
+    elif blockdaemon_url or blockdaemon_key:
+        print(
+            "BLOCKDAEMON_ARC_RPC_URL and BLOCKDAEMON_API_KEY must both be set "
+            "to use Blockdaemon — only one was found, skipping it.",
+            file=sys.stderr,
+        )
+
+    quicknode_url = os.environ.get("QUICKNODE_ARC_RPC_URL")
+    if quicknode_url:
+        specs.append({"name": "quicknode-keyed", "url": quicknode_url, "headers": None})
+
+    return specs
+
 # Tracked tokens and their decimals (see docs/architecture_essentials.md).
 # All three are the tokens seeded in the `projects` table by the initial
 # migration (supabase/migrations/20260921114348_init_schema.sql) — a token's
@@ -82,37 +166,37 @@ USD_PEGGED_1_TO_1 = {"USDC", "USYC"}
 
 # --- RPC retry/backoff (docs/BUGS.md #4 — confirmed live 2026-09-26) -------
 #
-# Real production log, 2026-09-26T05:42:50Z:
-#   requests.exceptions.HTTPError: 429 Client Error: Too Many Requests
-# raised from w3.eth.get_transaction_receipt(), uncaught, killing the whole
-# cron run before the checkpoint advanced and before run_discovery() ever
-# got a chance to execute. rpc.mainnet.arc.io's rate limit is no longer
-# "unconfirmed" — it's real, and this worker had zero retry/backoff on any
-# RPC call. This is the direct cause of the ~651k-block backlog observed
-# the same day.
+# Real production log, 2026-09-26T05:42:50Z and again at 08:34-08:38Z:
+# requests.exceptions.HTTPError: 429, raised from w3.eth.get_transaction_receipt(),
+# repeatedly, even after exponential backoff up to ~16s and even at
+# RPC_CONCURRENCY=3. A same-moment curl from a residential IP against the
+# same default endpoint returned 200 — confirming this is GitHub Actions'
+# source IP being throttled on rpc.mainnet.arc.io specifically, not a global
+# rate limit or outage. See the endpoint-pool comment above for the fix this
+# drove (rotation across Arc's documented mirror endpoints).
 #
-# RPC_RETRY_MAX_ATTEMPTS: total attempts per call (1 initial + N-1 retries).
-# RPC_RETRY_BASE_DELAY_SECONDS: exponential backoff base; actual delay is
-# base * 2^attempt, capped at RPC_RETRY_MAX_DELAY_SECONDS, plus jitter, so
-# concurrent workers don't all retry in lockstep. A Retry-After header, if
-# the RPC ever sends one, always wins over the computed backoff.
-RPC_RETRY_MAX_ATTEMPTS = int(os.environ.get("RPC_RETRY_MAX_ATTEMPTS", "5"))
+# RPC_RETRY_MAX_ATTEMPTS: total attempts per call against ONE endpoint before
+# moving on to the next endpoint in the pool (1 initial + N-1 retries).
+# Deliberately small (2) now that rotation exists — better to fail fast on a
+# throttled mirror and try the next one than to burn 16-30s backing off on a
+# single endpoint that curl already told us is being rate-limited.
+RPC_RETRY_MAX_ATTEMPTS = int(os.environ.get("RPC_RETRY_MAX_ATTEMPTS", "2"))
 RPC_RETRY_BASE_DELAY_SECONDS = float(os.environ.get("RPC_RETRY_BASE_DELAY_SECONDS", "2"))
 RPC_RETRY_MAX_DELAY_SECONDS = float(os.environ.get("RPC_RETRY_MAX_DELAY_SECONDS", "30"))
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def _call_with_retry(fn, *args, **kwargs):
+def _call_with_retry(fn, *args, max_attempts=None, **kwargs):
     """
     Call fn(*args, **kwargs), retrying on 429/5xx from the RPC endpoint with
     exponential backoff + jitter. Any other exception (or exhausting
-    retries) propagates exactly as before — run()'s existing try/except
-    still catches it and skips advancing the checkpoint, so this only
-    absorbs *transient* rate-limit/server errors, it doesn't hide real
-    failures.
+    retries) propagates so the caller (typically _call_on_pool, see below)
+    can move on to the next endpoint, or — if this is the last endpoint —
+    so run()'s existing try/except can skip advancing the checkpoint.
     """
+    attempts = max_attempts if max_attempts is not None else RPC_RETRY_MAX_ATTEMPTS
     last_exc = None
-    for attempt in range(RPC_RETRY_MAX_ATTEMPTS):
+    for attempt in range(attempts):
         try:
             return fn(*args, **kwargs)
         except requests.exceptions.HTTPError as exc:
@@ -120,7 +204,7 @@ def _call_with_retry(fn, *args, **kwargs):
             if status not in RETRYABLE_STATUS_CODES:
                 raise
             last_exc = exc
-            if attempt == RPC_RETRY_MAX_ATTEMPTS - 1:
+            if attempt == attempts - 1:
                 break
 
             retry_after = None
@@ -143,7 +227,7 @@ def _call_with_retry(fn, *args, **kwargs):
 
             print(
                 f"RPC call hit {status}, retrying in {delay:.1f}s "
-                f"(attempt {attempt + 1}/{RPC_RETRY_MAX_ATTEMPTS})",
+                f"(attempt {attempt + 1}/{attempts})",
                 file=sys.stderr,
             )
             time.sleep(delay)
@@ -151,11 +235,92 @@ def _call_with_retry(fn, *args, **kwargs):
     raise last_exc
 
 
+def _call_on_pool(pool: list, method_name: str, *args, **kwargs):
+    """
+    Try an eth_* call (by method name, e.g. "get_block") against each Web3
+    in `pool`, in order. Each endpoint gets its own short retry/backoff
+    budget via _call_with_retry; once that budget is exhausted for one
+    endpoint, move on to the next rather than continuing to hammer a mirror
+    that's already told us (via repeated 429s) that it's throttling us.
+    Only raises once every endpoint in the pool has failed.
+    """
+    last_exc = None
+    for w3 in pool:
+        fn = getattr(w3.eth, method_name)
+        try:
+            return _call_with_retry(fn, *args, **kwargs)
+        except requests.exceptions.HTTPError as exc:
+            last_exc = exc
+            continue
+    raise last_exc
+
+
+def _block_number_on_pool(pool: list) -> int:
+    """
+    eth.block_number is a property, not a callable, so it can't go through
+    _call_on_pool (which calls getattr(w3.eth, name)(*args, **kwargs)).
+    Same rotation behavior, just wrapped in a zero-arg lambda per endpoint.
+    """
+    last_exc = None
+    for w3 in pool:
+        try:
+            return _call_with_retry(lambda w3=w3: w3.eth.block_number)
+        except requests.exceptions.HTTPError as exc:
+            last_exc = exc
+            continue
+    raise last_exc
+
+
+def _as_pool(w3_or_pool) -> list:
+    """
+    Normalize a single Web3 instance or a list of them into a list, so
+    process_block()/process_blocks_concurrent() work unchanged whether
+    called with one connection (existing tests, get_web3()) or a real
+    multi-endpoint pool (get_web3_pool(), used by run()).
+    """
+    return w3_or_pool if isinstance(w3_or_pool, list) else [w3_or_pool]
+
+
 def get_web3() -> Web3:
+    """Single-endpoint connection to the primary/default RPC URL."""
     w3 = Web3(Web3.HTTPProvider(ARC_MAINNET_RPC))
     if not w3.is_connected():
         raise RuntimeError(f"Could not connect to Arc mainnet RPC at {ARC_MAINNET_RPC}")
     return w3
+
+
+def get_web3_pool() -> list:
+    """
+    Build the full RPC endpoint pool, preference order:
+      1. Dedicated/authenticated endpoints (Alchemy, dRPC, Blockdaemon,
+         QuickNode) — whichever are configured via env vars, each with its
+         own individual quota.
+      2. Free shared mirrors (ARC_RPC_URL / rpc.mainnet.arc.io plus
+         ARC_RPC_FALLBACK_URLS) — last resort, since these are the ones
+         confirmed to throttle GitHub Actions' source IP.
+    Skips any endpoint that fails a basic connectivity check up front (bad
+    key, wrong URL, endpoint down). Raises only if every single endpoint —
+    dedicated and free — is unreachable.
+    """
+    specs = _dedicated_endpoint_specs()
+    free_urls = [ARC_MAINNET_RPC] + [u for u in ARC_RPC_FALLBACK_URLS if u != ARC_MAINNET_RPC]
+    specs += [{"name": url, "url": url, "headers": None} for url in free_urls]
+
+    pool = []
+    for spec in specs:
+        try:
+            request_kwargs = {"headers": spec["headers"]} if spec["headers"] else {}
+            w3 = Web3(Web3.HTTPProvider(spec["url"], request_kwargs=request_kwargs))
+            if w3.is_connected():
+                pool.append(w3)
+            else:
+                print(f"RPC endpoint not connected, skipping: {spec['name']}", file=sys.stderr)
+        except Exception as exc:
+            print(f"RPC endpoint failed connectivity check, skipping: {spec['name']} ({exc})", file=sys.stderr)
+    if not pool:
+        tried = ", ".join(s["name"] for s in specs)
+        raise RuntimeError(f"No Arc RPC endpoints reachable (tried: {tried})")
+    return pool
 
 
 def _decode_transaction(tx_hash, block_number, block_ts, to_address, gas_price_fallback, receipt, contract_project_map):
@@ -215,7 +380,7 @@ def _decode_transaction(tx_hash, block_number, block_ts, to_address, gas_price_f
     return gas_event, token_flows
 
 
-def process_block(w3: Web3, block_number: int, contract_project_map: dict):
+def process_block(w3, block_number: int, contract_project_map: dict):
     """
     Fetch one block, decode its transactions and logs. Sequential —
     one eth_getTransactionReceipt round-trip per transaction. Kept for
@@ -223,16 +388,20 @@ def process_block(w3: Web3, block_number: int, contract_project_map: dict):
     (ingestion/tests/test_worker.py); run() no longer calls this — see
     process_blocks_concurrent() below, which is the actual fix for
     docs/BUGS.md #5.
+
+    `w3` may be a single Web3 (as in existing tests) or a list of Web3
+    instances (an RPC endpoint pool) — see _as_pool().
     Returns (gas_events: list[dict], token_flows: list[dict]).
     """
-    block = _call_with_retry(w3.eth.get_block, block_number, full_transactions=True)
+    pool = _as_pool(w3)
+    block = _call_on_pool(pool, "get_block", block_number, full_transactions=True)
     block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
 
     gas_events = []
     all_token_flows = []
 
     for tx in block["transactions"]:
-        receipt = _call_with_retry(w3.eth.get_transaction_receipt, tx["hash"])
+        receipt = _call_on_pool(pool, "get_transaction_receipt", tx["hash"])
         gas_event, token_flows = _decode_transaction(
             tx["hash"], block_number, block_ts, tx.get("to"),
             tx.get("gasPrice", 0), receipt, contract_project_map,
@@ -244,42 +413,44 @@ def process_block(w3: Web3, block_number: int, contract_project_map: dict):
     return gas_events, all_token_flows
 
 
-# How many eth_getTransactionReceipt calls to have in flight at once. This
-# is the actual fix for docs/BUGS.md #5: measured directly, the worker's
-# per-tx receipt calls were ~0.3-0.5 blocks/sec sequential vs Arc's real
-# ~2 blocks/sec — because each call is a separate network round-trip and
-# they were happening one at a time. web3.py's true JSON-RPC batch_requests()
-# API does not exist in this project's pinned major version (web3>=6.15,<7 —
-# confirmed directly against the installed 6.20.4, not assumed; it was added
-# in web3.py 7.x). Rather than take on a major dependency bump this fix
-# can't fully verify against the real Arc RPC from a sandboxed environment,
-# this instead fires the SAME unchanged get_transaction_receipt() calls
-# concurrently via a thread pool, overlapping their network latency instead
-# of reducing the number of requests. Decode logic (_decode_transaction) is
-# completely untouched by this change.
+# How many eth_getTransactionReceipt calls to have in flight at once (per
+# endpoint attempt). This is the actual fix for docs/BUGS.md #5: measured
+# directly, the worker's per-tx receipt calls were ~0.3-0.5 blocks/sec
+# sequential vs Arc's real ~2 blocks/sec — because each call is a separate
+# network round-trip and they were happening one at a time. web3.py's true
+# JSON-RPC batch_requests() API does not exist in this project's pinned
+# major version (web3>=6.15,<7 — confirmed directly against the installed
+# 6.20.4, not assumed; it was added in web3.py 7.x). Rather than take on a
+# major dependency bump this fix can't fully verify against the real Arc RPC
+# from a sandboxed environment, this instead fires the SAME unchanged
+# get_transaction_receipt() calls concurrently via a thread pool, overlapping
+# their network latency instead of reducing the number of requests. Decode
+# logic (_decode_transaction) is completely untouched by this change.
 #
 # LOWERED from 10 -> 3 on 2026-09-26 after a real 429 was observed in
-# production (docs/BUGS.md #4/#5). Firing more requests at once is exactly
-# what's more likely to trip a rate limiter, and the retry/backoff above is
-# a safety net, not a license to push concurrency back up blindly — raise
-# this only after watching several real cron runs at 3 with zero 429s in
-# the logs.
+# production. Endpoint rotation (see the pool comment above) is now the
+# primary defense against rate-limiting; this concurrency knob is secondary
+# — raise only after watching several real cron runs at 3 with zero 429s.
 RPC_CONCURRENCY = int(os.environ.get("RPC_CONCURRENCY", "3"))
 
 
-def fetch_receipts_concurrent(w3: Web3, tx_hashes: list) -> dict:
+def fetch_receipts_concurrent(w3, tx_hashes: list) -> dict:
     """
     Fetch every receipt in tx_hashes concurrently instead of one at a time.
-    Returns {tx_hash: receipt}. Each individual call retries transient
-    429/5xx errors (see _call_with_retry); an exception that survives all
-    retries propagates via future.result() exactly as a failure mid-loop
-    did before — run()'s existing try/except still catches it and skips
-    advancing the checkpoint.
+    Returns {tx_hash: receipt}. Each individual call rotates across the
+    full RPC endpoint pool (see _call_on_pool) and retries transient
+    429/5xx errors within each endpoint (see _call_with_retry); an
+    exception that survives every endpoint propagates via future.result()
+    exactly as a failure mid-loop did before — run()'s existing try/except
+    still catches it and skips advancing the checkpoint.
+
+    `w3` may be a single Web3 or a list (pool) — see _as_pool().
     """
+    pool = _as_pool(w3)
     receipts = {}
     with ThreadPoolExecutor(max_workers=RPC_CONCURRENCY) as executor:
         future_to_hash = {
-            executor.submit(_call_with_retry, w3.eth.get_transaction_receipt, h): h
+            executor.submit(_call_on_pool, pool, "get_transaction_receipt", h): h
             for h in tx_hashes
         }
         for future in as_completed(future_to_hash):
@@ -288,7 +459,7 @@ def fetch_receipts_concurrent(w3: Web3, tx_hashes: list) -> dict:
     return receipts
 
 
-def process_blocks_concurrent(w3: Web3, block_numbers: list, contract_project_map: dict):
+def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dict):
     """
     The actual fix for docs/BUGS.md #5 — used by run() instead of calling
     process_block() once per block. Blocks are still fetched sequentially
@@ -297,20 +468,23 @@ def process_blocks_concurrent(w3: Web3, block_numbers: list, contract_project_ma
     own measurement). Every transaction receipt across every block in this
     run is then fetched concurrently in one pass via fetch_receipts_concurrent(),
     instead of one full block-by-block, tx-by-tx sequential pass.
+
+    `w3` may be a single Web3 or a list (pool) — see _as_pool().
     Returns (gas_events: list[dict], token_flows: list[dict]) across all
     given blocks, same shape as calling process_block() repeatedly and
     concatenating results.
     """
+    pool = _as_pool(w3)
     tx_order = []
     tx_meta = {}
     for block_number in block_numbers:
-        block = _call_with_retry(w3.eth.get_block, block_number, full_transactions=True)
+        block = _call_on_pool(pool, "get_block", block_number, full_transactions=True)
         block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
         for tx in block["transactions"]:
             tx_order.append(tx["hash"])
             tx_meta[tx["hash"]] = (block_number, block_ts, tx.get("to"), tx.get("gasPrice", 0))
 
-    receipts = fetch_receipts_concurrent(w3, tx_order)
+    receipts = fetch_receipts_concurrent(pool, tx_order)
 
     all_gas_events = []
     all_token_flows = []
@@ -329,10 +503,10 @@ def process_blocks_concurrent(w3: Web3, block_numbers: list, contract_project_ma
 
 def run():
     client = get_client()
-    w3 = get_web3()
+    pool = get_web3_pool()
 
     last_synced = get_last_synced_block(client, DEFAULT_START_BLOCK)
-    latest_block = w3.eth.block_number
+    latest_block = _block_number_on_pool(pool)
 
     if last_synced >= latest_block:
         print(f"Already synced through block {last_synced}, chain tip is {latest_block}. Nothing to do.")
@@ -345,7 +519,7 @@ def run():
 
     try:
         block_numbers = list(range(last_synced + 1, end_block + 1))
-        all_gas_events, all_token_flows = process_blocks_concurrent(w3, block_numbers, contract_project_map)
+        all_gas_events, all_token_flows = process_blocks_concurrent(pool, block_numbers, contract_project_map)
     except Exception as exc:
         # Deliberately do NOT advance the checkpoint on failure — the next
         # run resumes from last_synced, per docs/AUDIT.md's idempotency check.
