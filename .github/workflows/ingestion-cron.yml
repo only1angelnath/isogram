@@ -12,11 +12,13 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    # Bumped 10 -> 15: retry/backoff + multi-endpoint rotation can add real
-    # wall-clock time per run now (docs/BUGS.md #4/#5) — don't let the
-    # timeout kill a run that would otherwise succeed on its 2nd or 3rd
-    # endpoint.
-    timeout-minutes: 15
+    # Bumped 10 -> 45: MAX_BLOCKS_PER_RUN raised 100 -> 3000 in worker.py to
+    # cope with GitHub's scheduled trigger firing hours apart instead of
+    # every 5 minutes (see worker.py's MAX_BLOCKS_PER_RUN comment). A run
+    # doing 3000 blocks needs real headroom, especially before we know how
+    # much the sticky-endpoint fix actually improves real throughput. If
+    # runs are finishing well under this, it's fine to lower again.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

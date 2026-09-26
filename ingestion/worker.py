@@ -152,8 +152,21 @@ TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a
 DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 
 # Don't process more than this many blocks in one run — keeps each cron
-# invocation short and bounds how much work is lost if a run fails partway.
-MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "100"))
+# invocation bounded and limits how much work is lost if a run fails
+# partway.
+#
+# RAISED 100 -> 3000 on 2026-09-26. GitHub's own `schedule:` trigger is
+# best-effort and was observed firing ~3 hours apart instead of the
+# configured */5 * * * * (a documented GitHub Actions limitation, not a
+# bug in this workflow — scheduled triggers can be delayed under platform
+# load, especially at tight intervals). At Arc's ~2 blocks/sec, a 3-hour
+# gap is ~21,600 new blocks between runs; MAX_BLOCKS_PER_RUN=100 could
+# never close that gap even with the RPC issues fully solved. 3000 is
+# still bounded (won't blow past ingestion-cron.yml's timeout on a normal
+# run) while making real progress against a multi-hour gap. Revisit once
+# an external trigger (see AGENTS.md/HANDOFF.md) makes GitHub's scheduler
+# unnecessary and the backlog is actually caught up.
+MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "3000"))
 
 # usd_value is only populated for tokens we can currently price at 1:1 USD.
 # EURC is EUR-pegged, not USD-pegged — pricing it at 1:1 USD here would be
@@ -235,36 +248,72 @@ def _call_with_retry(fn, *args, max_attempts=None, **kwargs):
     raise last_exc
 
 
-def _call_on_pool(pool: list, method_name: str, *args, **kwargs):
+class _StickyPoolIndex:
+    """
+    Tracks the last endpoint in the pool that actually worked, so
+    subsequent calls try it FIRST instead of always restarting from index 0.
+    Without this, if the first endpoint (e.g. Alchemy on a tight free-tier
+    limit) is rate-limiting us for a whole run, EVERY single call — there
+    can be thousands per run — pays the cost of failing on it before
+    falling through to whichever endpoint actually works. Observed directly
+    2026-09-26: a run that succeeded took 200s for 100 blocks, almost
+    entirely spent on repeated 429s from the pool's first entry before each
+    call fell through.
+
+    Not thread-safe in a strict sense (multiple threads in
+    fetch_receipts_concurrent's pool can race on .index), and deliberately
+    not locked — worst case under a race is two threads briefly try the
+    same stale index together, which costs at most one extra fallback
+    step, not a correctness issue.
+    """
+    def __init__(self):
+        self.index = 0
+
+
+def _call_on_pool(pool: list, sticky: "_StickyPoolIndex", method_name: str, *args, **kwargs):
     """
     Try an eth_* call (by method name, e.g. "get_block") against each Web3
-    in `pool`, in order. Each endpoint gets its own short retry/backoff
-    budget via _call_with_retry; once that budget is exhausted for one
-    endpoint, move on to the next rather than continuing to hammer a mirror
-    that's already told us (via repeated 429s) that it's throttling us.
-    Only raises once every endpoint in the pool has failed.
+    in `pool`, starting from `sticky.index` (the last endpoint known to
+    work) and wrapping around, rather than always starting at pool[0]. Each
+    endpoint gets its own short retry/backoff budget via _call_with_retry;
+    once that budget is exhausted for one endpoint, move to the next. On
+    success, updates sticky.index so later calls start there too. Only
+    raises once every endpoint in the pool has failed.
     """
+    n = len(pool)
+    start = sticky.index % n
     last_exc = None
-    for w3 in pool:
+    for offset in range(n):
+        i = (start + offset) % n
+        w3 = pool[i]
         fn = getattr(w3.eth, method_name)
         try:
-            return _call_with_retry(fn, *args, **kwargs)
+            result = _call_with_retry(fn, *args, **kwargs)
+            sticky.index = i
+            return result
         except requests.exceptions.HTTPError as exc:
             last_exc = exc
             continue
     raise last_exc
 
 
-def _block_number_on_pool(pool: list) -> int:
+def _block_number_on_pool(pool: list, sticky: "_StickyPoolIndex") -> int:
     """
     eth.block_number is a property, not a callable, so it can't go through
     _call_on_pool (which calls getattr(w3.eth, name)(*args, **kwargs)).
-    Same rotation behavior, just wrapped in a zero-arg lambda per endpoint.
+    Same sticky-rotation behavior, just wrapped in a zero-arg lambda per
+    endpoint.
     """
+    n = len(pool)
+    start = sticky.index % n
     last_exc = None
-    for w3 in pool:
+    for offset in range(n):
+        i = (start + offset) % n
+        w3 = pool[i]
         try:
-            return _call_with_retry(lambda w3=w3: w3.eth.block_number)
+            result = _call_with_retry(lambda w3=w3: w3.eth.block_number)
+            sticky.index = i
+            return result
         except requests.exceptions.HTTPError as exc:
             last_exc = exc
             continue
@@ -380,7 +429,7 @@ def _decode_transaction(tx_hash, block_number, block_ts, to_address, gas_price_f
     return gas_event, token_flows
 
 
-def process_block(w3, block_number: int, contract_project_map: dict):
+def process_block(w3, block_number: int, contract_project_map: dict, sticky: "_StickyPoolIndex" = None):
     """
     Fetch one block, decode its transactions and logs. Sequential —
     one eth_getTransactionReceipt round-trip per transaction. Kept for
@@ -390,18 +439,21 @@ def process_block(w3, block_number: int, contract_project_map: dict):
     docs/BUGS.md #5.
 
     `w3` may be a single Web3 (as in existing tests) or a list of Web3
-    instances (an RPC endpoint pool) — see _as_pool().
+    instances (an RPC endpoint pool) — see _as_pool(). `sticky` defaults to
+    a fresh _StickyPoolIndex() when not supplied (existing single-w3 tests
+    don't need to care about it).
     Returns (gas_events: list[dict], token_flows: list[dict]).
     """
     pool = _as_pool(w3)
-    block = _call_on_pool(pool, "get_block", block_number, full_transactions=True)
+    sticky = sticky if sticky is not None else _StickyPoolIndex()
+    block = _call_on_pool(pool, sticky, "get_block", block_number, full_transactions=True)
     block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
 
     gas_events = []
     all_token_flows = []
 
     for tx in block["transactions"]:
-        receipt = _call_on_pool(pool, "get_transaction_receipt", tx["hash"])
+        receipt = _call_on_pool(pool, sticky, "get_transaction_receipt", tx["hash"])
         gas_event, token_flows = _decode_transaction(
             tx["hash"], block_number, block_ts, tx.get("to"),
             tx.get("gasPrice", 0), receipt, contract_project_map,
@@ -434,23 +486,25 @@ def process_block(w3, block_number: int, contract_project_map: dict):
 RPC_CONCURRENCY = int(os.environ.get("RPC_CONCURRENCY", "3"))
 
 
-def fetch_receipts_concurrent(w3, tx_hashes: list) -> dict:
+def fetch_receipts_concurrent(w3, tx_hashes: list, sticky: "_StickyPoolIndex" = None) -> dict:
     """
     Fetch every receipt in tx_hashes concurrently instead of one at a time.
     Returns {tx_hash: receipt}. Each individual call rotates across the
-    full RPC endpoint pool (see _call_on_pool) and retries transient
-    429/5xx errors within each endpoint (see _call_with_retry); an
-    exception that survives every endpoint propagates via future.result()
-    exactly as a failure mid-loop did before — run()'s existing try/except
-    still catches it and skips advancing the checkpoint.
+    full RPC endpoint pool starting from the shared sticky.index (see
+    _call_on_pool) and retries transient 429/5xx errors within each
+    endpoint (see _call_with_retry); an exception that survives every
+    endpoint propagates via future.result() exactly as a failure mid-loop
+    did before — run()'s existing try/except still catches it and skips
+    advancing the checkpoint.
 
     `w3` may be a single Web3 or a list (pool) — see _as_pool().
     """
     pool = _as_pool(w3)
+    sticky = sticky if sticky is not None else _StickyPoolIndex()
     receipts = {}
     with ThreadPoolExecutor(max_workers=RPC_CONCURRENCY) as executor:
         future_to_hash = {
-            executor.submit(_call_on_pool, pool, "get_transaction_receipt", h): h
+            executor.submit(_call_on_pool, pool, sticky, "get_transaction_receipt", h): h
             for h in tx_hashes
         }
         for future in as_completed(future_to_hash):
@@ -459,7 +513,7 @@ def fetch_receipts_concurrent(w3, tx_hashes: list) -> dict:
     return receipts
 
 
-def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dict):
+def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dict, sticky: "_StickyPoolIndex" = None):
     """
     The actual fix for docs/BUGS.md #5 — used by run() instead of calling
     process_block() once per block. Blocks are still fetched sequentially
@@ -469,22 +523,27 @@ def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dic
     run is then fetched concurrently in one pass via fetch_receipts_concurrent(),
     instead of one full block-by-block, tx-by-tx sequential pass.
 
-    `w3` may be a single Web3 or a list (pool) — see _as_pool().
+    `w3` may be a single Web3 or a list (pool) — see _as_pool(). `sticky`
+    (a shared _StickyPoolIndex) carries the last-known-good endpoint across
+    every block-fetch and every receipt-fetch in this call, so a run spends
+    at most one round of fallback attempts finding a working endpoint, not
+    one round per call.
     Returns (gas_events: list[dict], token_flows: list[dict]) across all
     given blocks, same shape as calling process_block() repeatedly and
     concatenating results.
     """
     pool = _as_pool(w3)
+    sticky = sticky if sticky is not None else _StickyPoolIndex()
     tx_order = []
     tx_meta = {}
     for block_number in block_numbers:
-        block = _call_on_pool(pool, "get_block", block_number, full_transactions=True)
+        block = _call_on_pool(pool, sticky, "get_block", block_number, full_transactions=True)
         block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
         for tx in block["transactions"]:
             tx_order.append(tx["hash"])
             tx_meta[tx["hash"]] = (block_number, block_ts, tx.get("to"), tx.get("gasPrice", 0))
 
-    receipts = fetch_receipts_concurrent(pool, tx_order)
+    receipts = fetch_receipts_concurrent(pool, tx_order, sticky)
 
     all_gas_events = []
     all_token_flows = []
@@ -504,9 +563,10 @@ def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dic
 def run():
     client = get_client()
     pool = get_web3_pool()
+    sticky = _StickyPoolIndex()
 
     last_synced = get_last_synced_block(client, DEFAULT_START_BLOCK)
-    latest_block = _block_number_on_pool(pool)
+    latest_block = _block_number_on_pool(pool, sticky)
 
     if last_synced >= latest_block:
         print(f"Already synced through block {last_synced}, chain tip is {latest_block}. Nothing to do.")
@@ -519,7 +579,7 @@ def run():
 
     try:
         block_numbers = list(range(last_synced + 1, end_block + 1))
-        all_gas_events, all_token_flows = process_blocks_concurrent(pool, block_numbers, contract_project_map)
+        all_gas_events, all_token_flows = process_blocks_concurrent(pool, block_numbers, contract_project_map, sticky)
     except Exception as exc:
         # Deliberately do NOT advance the checkpoint on failure — the next
         # run resumes from last_synced, per docs/AUDIT.md's idempotency check.
