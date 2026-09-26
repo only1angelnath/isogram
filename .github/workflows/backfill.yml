@@ -1,0 +1,66 @@
+name: Ingestion backfill (one-off)
+
+# Manual only — NOT the regular cron (see ingestion-cron.yml). This exists
+# solely to clear the multi-day backlog that built up while
+# rpc.mainnet.arc.io was 429ing GitHub Actions (docs/BUGS.md #4/#5) and
+# while the scheduled cron trigger itself was firing hours apart instead of
+# every 5 minutes. Once the backlog is actually closed, this workflow
+# should just sit unused — ingestion-cron.yml handles ongoing real-time
+# sync from there.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # Public repos get free Actions minutes; GitHub's hard cap on a single
+    # job is 360 minutes. Stop with margin before that, print a message,
+    # and let the run be manually re-triggered to continue — checkpoint
+    # only advances on a fully successful batch, so nothing is lost or
+    # duplicated across separate invocations of this workflow.
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: ingestion
+        run: pip install -r requirements.txt
+
+      - name: Backfill loop
+        working-directory: ingestion
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ARC_RPC_URL: ${{ secrets.ARC_RPC_URL }}
+          ALCHEMY_ARC_RPC_URL: ${{ secrets.ALCHEMY_ARC_RPC_URL }}
+          DRPC_ARC_RPC_URL: ${{ secrets.DRPC_ARC_RPC_URL }}
+          BLOCKDAEMON_ARC_RPC_URL: ${{ secrets.BLOCKDAEMON_ARC_RPC_URL }}
+          BLOCKDAEMON_API_KEY: ${{ secrets.BLOCKDAEMON_API_KEY }}
+          QUICKNODE_ARC_RPC_URL: ${{ secrets.QUICKNODE_ARC_RPC_URL }}
+          # Much bigger than the regular cron's 3000 — no 45-minute wall
+          # here, just this job's own 350-minute budget.
+          MAX_BLOCKS_PER_RUN: "20000"
+        run: |
+          END_TIME=$(( $(date +%s) + 335*60 ))  # 15min margin before the job's own timeout
+          ITER=0
+          while [ "$(date +%s)" -lt "$END_TIME" ]; do
+            ITER=$((ITER + 1))
+            echo "=== Backfill iteration $ITER at $(date -u +%FT%TZ) ==="
+            if OUTPUT=$(python worker.py 2>&1); then
+              echo "$OUTPUT"
+              if echo "$OUTPUT" | grep -q "Nothing to do"; then
+                echo "Caught up to chain tip — backfill complete."
+                exit 0
+              fi
+            else
+              echo "$OUTPUT"
+              echo "Iteration failed (checkpoint unaffected on failure) — pausing 30s"
+              sleep 30
+            fi
+            sleep 2
+          done
+          echo "Time budget used for this invocation — re-run this workflow manually to continue."
