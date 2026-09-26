@@ -14,11 +14,13 @@ Usage:
 """
 
 import os
+import random
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+import requests
 from dotenv import load_dotenv
 from web3 import Web3
 
@@ -67,10 +69,6 @@ DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 
 # Don't process more than this many blocks in one run — keeps each cron
 # invocation short and bounds how much work is lost if a run fails partway.
-# 100 is conservative: measured processing speed (~0.3-0.5 blocks/sec,
-# sequential per-tx receipt calls) is well below Arc's real ~2 blocks/sec,
-# so the worker currently cannot keep pace with the chain in real time.
-# See docs/BUGS.md for the tracked fix (batch RPC receipt calls).
 MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "100"))
 
 # usd_value is only populated for tokens we can currently price at 1:1 USD.
@@ -81,6 +79,76 @@ MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "100"))
 # USYC is USD-denominated but not necessarily exactly 1:1 in practice; treated
 # as 1:1 for v1 alongside USDC, consistent with scoring/tvl.py's PRICED_TOKENS.
 USD_PEGGED_1_TO_1 = {"USDC", "USYC"}
+
+# --- RPC retry/backoff (docs/BUGS.md #4 — confirmed live 2026-09-26) -------
+#
+# Real production log, 2026-09-26T05:42:50Z:
+#   requests.exceptions.HTTPError: 429 Client Error: Too Many Requests
+# raised from w3.eth.get_transaction_receipt(), uncaught, killing the whole
+# cron run before the checkpoint advanced and before run_discovery() ever
+# got a chance to execute. rpc.mainnet.arc.io's rate limit is no longer
+# "unconfirmed" — it's real, and this worker had zero retry/backoff on any
+# RPC call. This is the direct cause of the ~651k-block backlog observed
+# the same day.
+#
+# RPC_RETRY_MAX_ATTEMPTS: total attempts per call (1 initial + N-1 retries).
+# RPC_RETRY_BASE_DELAY_SECONDS: exponential backoff base; actual delay is
+# base * 2^attempt, capped at RPC_RETRY_MAX_DELAY_SECONDS, plus jitter, so
+# concurrent workers don't all retry in lockstep. A Retry-After header, if
+# the RPC ever sends one, always wins over the computed backoff.
+RPC_RETRY_MAX_ATTEMPTS = int(os.environ.get("RPC_RETRY_MAX_ATTEMPTS", "5"))
+RPC_RETRY_BASE_DELAY_SECONDS = float(os.environ.get("RPC_RETRY_BASE_DELAY_SECONDS", "2"))
+RPC_RETRY_MAX_DELAY_SECONDS = float(os.environ.get("RPC_RETRY_MAX_DELAY_SECONDS", "30"))
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _call_with_retry(fn, *args, **kwargs):
+    """
+    Call fn(*args, **kwargs), retrying on 429/5xx from the RPC endpoint with
+    exponential backoff + jitter. Any other exception (or exhausting
+    retries) propagates exactly as before — run()'s existing try/except
+    still catches it and skips advancing the checkpoint, so this only
+    absorbs *transient* rate-limit/server errors, it doesn't hide real
+    failures.
+    """
+    last_exc = None
+    for attempt in range(RPC_RETRY_MAX_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status not in RETRYABLE_STATUS_CODES:
+                raise
+            last_exc = exc
+            if attempt == RPC_RETRY_MAX_ATTEMPTS - 1:
+                break
+
+            retry_after = None
+            if exc.response is not None:
+                header = exc.response.headers.get("Retry-After")
+                if header:
+                    try:
+                        retry_after = float(header)
+                    except ValueError:
+                        retry_after = None
+
+            if retry_after is not None:
+                delay = retry_after
+            else:
+                delay = min(
+                    RPC_RETRY_MAX_DELAY_SECONDS,
+                    RPC_RETRY_BASE_DELAY_SECONDS * (2 ** attempt),
+                )
+            delay += random.uniform(0, 0.5)  # jitter
+
+            print(
+                f"RPC call hit {status}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{RPC_RETRY_MAX_ATTEMPTS})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+
+    raise last_exc
 
 
 def get_web3() -> Web3:
@@ -157,14 +225,14 @@ def process_block(w3: Web3, block_number: int, contract_project_map: dict):
     docs/BUGS.md #5.
     Returns (gas_events: list[dict], token_flows: list[dict]).
     """
-    block = w3.eth.get_block(block_number, full_transactions=True)
+    block = _call_with_retry(w3.eth.get_block, block_number, full_transactions=True)
     block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
 
     gas_events = []
     all_token_flows = []
 
     for tx in block["transactions"]:
-        receipt = w3.eth.get_transaction_receipt(tx["hash"])
+        receipt = _call_with_retry(w3.eth.get_transaction_receipt, tx["hash"])
         gas_event, token_flows = _decode_transaction(
             tx["hash"], block_number, block_ts, tx.get("to"),
             tx.get("gasPrice", 0), receipt, contract_project_map,
@@ -190,23 +258,28 @@ def process_block(w3: Web3, block_number: int, contract_project_map: dict):
 # of reducing the number of requests. Decode logic (_decode_transaction) is
 # completely untouched by this change.
 #
-# Starts conservative because rpc.mainnet.arc.io's rate limit is unconfirmed
-# (docs/BUGS.md #4) — raise gradually and watch for 429s/timeouts in the
-# ingestion-cron workflow logs rather than maximizing this blindly.
-RPC_CONCURRENCY = int(os.environ.get("RPC_CONCURRENCY", "10"))
+# LOWERED from 10 -> 3 on 2026-09-26 after a real 429 was observed in
+# production (docs/BUGS.md #4/#5). Firing more requests at once is exactly
+# what's more likely to trip a rate limiter, and the retry/backoff above is
+# a safety net, not a license to push concurrency back up blindly — raise
+# this only after watching several real cron runs at 3 with zero 429s in
+# the logs.
+RPC_CONCURRENCY = int(os.environ.get("RPC_CONCURRENCY", "3"))
 
 
 def fetch_receipts_concurrent(w3: Web3, tx_hashes: list) -> dict:
     """
     Fetch every receipt in tx_hashes concurrently instead of one at a time.
-    Returns {tx_hash: receipt}. An exception from any single call propagates
-    (via future.result()) exactly as a failure mid-loop did before — run()'s
-    existing try/except still catches it and skips advancing the checkpoint.
+    Returns {tx_hash: receipt}. Each individual call retries transient
+    429/5xx errors (see _call_with_retry); an exception that survives all
+    retries propagates via future.result() exactly as a failure mid-loop
+    did before — run()'s existing try/except still catches it and skips
+    advancing the checkpoint.
     """
     receipts = {}
     with ThreadPoolExecutor(max_workers=RPC_CONCURRENCY) as executor:
         future_to_hash = {
-            executor.submit(w3.eth.get_transaction_receipt, h): h
+            executor.submit(_call_with_retry, w3.eth.get_transaction_receipt, h): h
             for h in tx_hashes
         }
         for future in as_completed(future_to_hash):
@@ -231,7 +304,7 @@ def process_blocks_concurrent(w3: Web3, block_numbers: list, contract_project_ma
     tx_order = []
     tx_meta = {}
     for block_number in block_numbers:
-        block = w3.eth.get_block(block_number, full_transactions=True)
+        block = _call_with_retry(w3.eth.get_block, block_number, full_transactions=True)
         block_ts = datetime.fromtimestamp(block["timestamp"], tz=timezone.utc).isoformat()
         for tx in block["transactions"]:
             tx_order.append(tx["hash"])
@@ -290,6 +363,16 @@ from discovery import run_discovery
 
 if __name__ == "__main__":
     start = time.monotonic()
-    run()
+    try:
+        run()
+    except Exception:
+        # run_discovery() is independent of ingestion succeeding — a 429
+        # (or any other) failure in run() should not also silently prevent
+        # discovery from processing whatever unmapped contracts already
+        # exist in gas_events from prior successful runs. Re-raise after,
+        # so the job still shows red in Actions (a real ingestion failure
+        # should not go unnoticed), but discovery gets its chance first.
+        run_discovery()
+        raise
     run_discovery()
     print(f"Finished in {time.monotonic() - start:.1f}s")
