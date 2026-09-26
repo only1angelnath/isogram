@@ -1,13 +1,13 @@
 name: Ingestion cron
 
 on:
-  schedule:
+  #schedule:
     # Every 5 minutes. See docs/BUGS.md #4/#5 — rpc.mainnet.arc.io's rate
     # limit is confirmed (not just "no documented limit"), which is why the
     # worker now rotates across dedicated + free-mirror endpoints. Tighten
     # or loosen once real usage patterns are known against the new pool.
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}  # allow manual runs from the Actions tab
+    #- cron: "*/5 * * * *"
+  #workflow_dispatch: {}  # allow manual runs from the Actions tab
 
 jobs:
   ingest:
