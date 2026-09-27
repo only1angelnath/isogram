@@ -91,25 +91,53 @@ def resolve_project_id(contract_address: str, contract_project_map: dict[str, st
 
 
 # --- Upserts -----------------------------------------------------------------
+#
+# UPSERT_CHUNK_SIZE (2026-09-27): a real backfill run with MAX_BLOCKS_PER_RUN
+# =20000 produced ~210,000 gas_events rows and sent them as ONE upsert() call
+# — Postgres killed it every single time with:
+#   postgrest.exceptions.APIError: {'message': 'canceling statement due to
+#   statement timeout', 'code': '57014', ...}
+# Because the checkpoint only advances on full success, this meant 5+
+# consecutive backfill iterations (~5h50m of wall-clock time, all the RPC
+# fetching work included) each redid the exact same block range from
+# scratch and threw it away at the very last step. Chunking the upsert into
+# smaller batches means a large run finishes via many small, fast
+# statements instead of one huge one that can't complete in time — this is
+# what makes a large MAX_BLOCKS_PER_RUN actually safe to use, independent
+# of how big it gets.
+UPSERT_CHUNK_SIZE = int(os.environ.get("UPSERT_CHUNK_SIZE", "500"))
+
+
+def _chunks(rows: list[dict], size: int):
+    for i in range(0, len(rows), size):
+        yield rows[i:i + size]
+
 
 def upsert_gas_events(client: Client, events: list[dict]) -> None:
     """
-    Batch upsert into gas_events. Each dict must have: tx_hash,
-    contract_address, project_id (nullable), usdc_gas_paid, block_number, ts.
-    tx_hash is the primary key, so a rerun over an already-processed block
-    range updates rather than duplicates rows.
+    Batch upsert into gas_events, in chunks of UPSERT_CHUNK_SIZE rows so a
+    large batch can't blow Postgres's statement timeout (see comment above).
+    Each dict must have: tx_hash, contract_address, project_id (nullable),
+    usdc_gas_paid, block_number, ts. tx_hash is the primary key, so a rerun
+    over an already-processed block range updates rather than duplicates
+    rows — true per-chunk as well as for the batch as a whole.
     """
     if not events:
         return
-    client.table("gas_events").upsert(events, on_conflict="tx_hash").execute()
+    for chunk in _chunks(events, UPSERT_CHUNK_SIZE):
+        client.table("gas_events").upsert(chunk, on_conflict="tx_hash").execute()
 
 
 def upsert_token_flows(client: Client, flows: list[dict]) -> None:
     """
-    Batch insert into token_flows. This table has no natural unique key
-    (bigserial id), so callers are responsible for not re-submitting the same
-    event twice — the worker's block-range checkpointing handles that.
+    Batch insert into token_flows, in chunks of UPSERT_CHUNK_SIZE rows (see
+    upsert_gas_events / the module comment above for why). This table has no
+    natural unique key (bigserial id), so callers are responsible for not
+    re-submitting the same event twice — the worker's block-range
+    checkpointing handles that; chunking here doesn't change that contract,
+    it just splits one large insert into several smaller ones.
     """
     if not flows:
         return
-    client.table("token_flows").insert(flows).execute()
+    for chunk in _chunks(flows, UPSERT_CHUNK_SIZE):
+        client.table("token_flows").insert(chunk).execute()
