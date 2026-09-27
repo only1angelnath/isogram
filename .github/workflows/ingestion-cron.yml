@@ -1,16 +1,14 @@
 name: Ingestion cron
 
 on:
-  # PAUSED 2026-09-27 during backfill.yml's run — both workflows write the
-  # same sync_state checkpoint row, and a scheduled run finishing after the
-  # backfill has already pushed the checkpoint far ahead could overwrite it
-  # backward, losing progress. Restore this once the backlog is closed:
-  #
-  #   schedule:
-  #     - cron: "*/5 * * * *"
-  #
-  # workflow_dispatch below is left enabled so this can still be triggered
-  # manually if needed while paused.
+  # RESUMED 2026-09-27 after jump_and_seed_backfill.py moved the live
+  # checkpoint forward to near the chain tip and split the skipped range
+  # into a separate, bounded historical_backfill_state job (see
+  # backfill.yml + backfill_historical.py). Live ingestion and the
+  # historical backfill now track completely separate checkpoint state, so
+  # there's no more race to pause for — safe to run both at once.
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}  # allow manual runs from the Actions tab
 
 jobs:

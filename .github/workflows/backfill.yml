@@ -1,12 +1,12 @@
 name: Ingestion backfill (one-off)
 
-# Manual only — NOT the regular cron (see ingestion-cron.yml). This exists
-# solely to clear the multi-day backlog that built up while
-# rpc.mainnet.arc.io was 429ing GitHub Actions (docs/BUGS.md #4/#5) and
-# while the scheduled cron trigger itself was firing hours apart instead of
-# every 5 minutes. Once the backlog is actually closed, this workflow
-# should just sit unused — ingestion-cron.yml handles ongoing real-time
-# sync from there.
+# Manual only — NOT the regular cron (see ingestion-cron.yml). Closes the
+# FIXED historical gap recorded by jump_and_seed_backfill.py in
+# historical_backfill_state — a bounded range, not the live chain tip, so
+# this job can actually finish instead of racing new blocks forever (the
+# original open-ended approach against the live tip never converged).
+# Safe to run at the same time as ingestion-cron: they track completely
+# separate checkpoint state (historical_backfill_state vs sync_state).
 on:
   workflow_dispatch: {}
 
@@ -44,16 +44,25 @@ jobs:
           # Much bigger than the regular cron's 3000 — no 45-minute wall
           # here, just this job's own 350-minute budget.
           MAX_BLOCKS_PER_RUN: "20000"
+          # Backfill-only override: 3 (worker.py's default, used by the
+          # regular cron) was set conservatively before the sticky-endpoint
+          # + dedicated-pool fix was proven out. Four consecutive clean
+          # 20k-block iterations (2026-09-27) confirm the pool is stable
+          # under load, so push concurrency up here to get more net
+          # throughput per run while the backlog is being cleared. The
+          # cron's own default stays at 3 — only override it here if the
+          # same stability holds up over more runs.
+          RPC_CONCURRENCY: "6"
         run: |
           END_TIME=$(( $(date +%s) + 335*60 ))  # 15min margin before the job's own timeout
           ITER=0
           while [ "$(date +%s)" -lt "$END_TIME" ]; do
             ITER=$((ITER + 1))
             echo "=== Backfill iteration $ITER at $(date -u +%FT%TZ) ==="
-            if OUTPUT=$(python worker.py 2>&1); then
+            if OUTPUT=$(python backfill_historical.py 2>&1); then
               echo "$OUTPUT"
               if echo "$OUTPUT" | grep -q "Nothing to do"; then
-                echo "Caught up to chain tip — backfill complete."
+                echo "Historical backfill complete."
                 exit 0
               fi
             else
