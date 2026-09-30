@@ -606,7 +606,13 @@ if __name__ == "__main__":
         # exist in gas_events from prior successful runs. Re-raise after,
         # so the job still shows red in Actions (a real ingestion failure
         # should not go unnoticed), but discovery gets its chance first.
-        run_discovery()
+        discovery_result = run_discovery()
+        print(f"Discovery: {discovery_result['touched']} touched, "
+              f"{discovery_result['classified']} classified, "
+              f"{discovery_result['promoted']} promoted.")
         raise
-    run_discovery()
+    discovery_result = run_discovery()
+    print(f"Discovery: {discovery_result['touched']} touched, "
+          f"{discovery_result['classified']} classified, "
+          f"{discovery_result['promoted']} promoted.")
     print(f"Finished in {time.monotonic() - start:.1f}s")
