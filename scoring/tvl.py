@@ -148,7 +148,12 @@ def _decode_balance(raw_result, decimals: int) -> Decimal:
 def fetch_contract_token_balance(pool: list, contract_address: str, token_address: str, decimals: int) -> Decimal:
     """Query the actual current on-chain balance of token_address held by contract_address."""
     calldata = _encode_balance_of_calldata(contract_address)
-    raw_result = _call_on_pool(pool, {"to": token_address, "data": calldata})
+    # web3.py's eth_call validates the "to" field as a checksummed address
+    # (EIP-55) and raises InvalidAddress otherwise — confirmed live
+    # 2026-09-30. The holder address inside calldata doesn't need this (it's
+    # raw hex data, not validated by web3.py), only the top-level "to".
+    checksummed_token_address = Web3.to_checksum_address(token_address)
+    raw_result = _call_on_pool(pool, {"to": checksummed_token_address, "data": calldata})
     return _decode_balance(raw_result, decimals)
 
 
