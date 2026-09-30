@@ -12,20 +12,40 @@ worker.py block-processing pass):
    first_seen, last_seen bumped each run).
 2. classify_candidates() — for rows at or above CALL_COUNT_THRESHOLD that
    are still 'unclassified', run the classification pipeline and record
-   the result. Two outcomes:
-     - real signal found (known infra, or a GeckoTerminal-indexed token
-       with a pool) -> status='needs_review', category/gecko_* filled in
-     - no real signal -> status stays 'unclassified' (or moves to
-       'needs_review' with category=NULL if it's genuinely been reviewed
-       and found wanting — see classify_one())
+   the result, then move to 'needs_review' EITHER WAY (see 2026-09-30
+   note below) — category filled in if a real signal was found, or
+   category=NULL if every source was tried and none matched.
 3. promote_ready_candidates() — status='needs_review' rows that have a
    non-null category get inserted into projects and marked 'promoted'.
    This is the hybrid gate from docs/HANDOVER.md section 5: call-count
-   threshold AND real classification, not either alone.
+   threshold AND real classification, not either alone. Rows that reached
+   'needs_review' with category=NULL are exactly the manual-review queue
+   docs/AUDIT.md's admin routes are for — a human sets the category via
+   the admin panel, and the next run's promote_ready_candidates() picks
+   them up automatically once that happens.
 
 Rows below CALL_COUNT_THRESHOLD are left 'unclassified' and simply keep
 accumulating call_count on every run until they either cross the
 threshold or the chain shows they're one-off noise.
+
+CHANGED 2026-09-30: a real check against ~1,100 accumulated candidates
+showed the ORIGINAL bug in this file — candidates that failed
+classification stayed status='unclassified' forever, meaning (a) they were
+silently re-classified (and re-billed against API quota) on every single
+ingestion cycle indefinitely, and (b) they never actually reached the admin
+manual-review queue despite the module docstring always having described
+that as the intended fallback. Fixed: classify_candidates() now always
+transitions a checked candidate to 'needs_review' (with category=NULL on a
+miss), so it's checked exactly once automatically and then either
+auto-promotes or waits for a human.
+
+Also added Dexscreener as a second, independent, keyless classification
+source alongside CoinGecko/GeckoTerminal (which are the same underlying
+onchain data — CoinGecko acquired GeckoTerminal — just paid vs. free tier;
+this now falls back to the free public endpoint when COINGECKO_PRO_API_KEY
+isn't set, instead of skipping classification entirely). Arkham was
+considered and dropped: paid-only, and no confirmed Arc coverage, unlike
+CoinGecko/GeckoTerminal/Dexscreener which reportedly do have real Arc data.
 """
 
 import os
@@ -36,6 +56,11 @@ from supabase import create_client
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+# Optional. If set, uses CoinGecko's paid pro-api (higher rate limit). If
+# unset, falls back to the free public api.coingecko.com onchain endpoint
+# (same underlying GeckoTerminal data, just rate-limited) — so
+# classification still works with zero cost/setup, just more slowly at
+# higher candidate volume.
 COINGECKO_API_KEY = os.environ.get("COINGECKO_PRO_API_KEY")
 
 # Tune as more days of real gas_events accumulate (see the distribution
@@ -47,16 +72,23 @@ CALL_COUNT_THRESHOLD = 15
 # Canonical, deterministically-deployed infra contracts that appear at
 # the same address across most EVM chains. These are shared plumbing,
 # not "a project someone built" — classify them immediately without
-# spending a GeckoTerminal call on them, and never surface them as if
-# they were a discovered Arc-native project.
+# spending an API call on them, and never surface them as if they were a
+# discovered Arc-native project.
 KNOWN_INFRA_CONTRACTS = {
     "0x000000000022d473030f116ddee9f6b43ac78ba3": "Uniswap Permit2",
     "0x0000000071727de22e5e9d8baf0edac6f37da032": "ERC-4337 EntryPoint v0.7",
 }
 
-GECKOTERMINAL_TOKEN_INFO_URL = (
+GECKOTERMINAL_PRO_URL = (
     "https://pro-api.coingecko.com/api/v3/onchain/networks/arc/tokens/{address}/info"
 )
+GECKOTERMINAL_FREE_URL = (
+    "https://api.coingecko.com/api/v3/onchain/networks/arc/tokens/{address}/info"
+)
+# Free, keyless, multi-chain pair index — a second, independent source that
+# might have a given Arc pair indexed even if CoinGecko/GeckoTerminal
+# doesn't (or vice versa).
+DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
 
 
 def _client():
@@ -70,12 +102,6 @@ def upsert_unmapped_contracts(db=None) -> int:
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
 
-    # One row per unmapped contract, with its count and time bounds.
-    # Supabase's Python client doesn't do raw GROUP BY, so this pulls
-    # the unmapped rows and aggregates in Python — fine at current
-    # mainnet volume, revisit if gas_events grows large enough for this
-    # to matter (same caveat ingestion/worker.py already tracks for
-    # blocks-per-run, see docs/BUGS.md #5).
     resp = (
         db.table("gas_events")
         .select("contract_address, ts")
@@ -111,18 +137,26 @@ def upsert_unmapped_contracts(db=None) -> int:
 
 
 def _gecko_token_info(address: str) -> dict | None:
-    """Query GeckoTerminal's onchain token-info endpoint. Returns None on
-    404 (not indexed — no pool yet) or any request failure; never
+    """
+    Query CoinGecko/GeckoTerminal's onchain token-info endpoint — paid
+    pro-api if COINGECKO_PRO_API_KEY is set (higher rate limit), else the
+    free public endpoint (same data, keyless, more rate-limited). Returns
+    None on 404 (not indexed), any non-200, or any request failure; never
     raises, since a classification miss should just leave the candidate
-    unclassified, not break the ingestion run."""
-    if not COINGECKO_API_KEY:
-        return None
+    for the next source (or manual review), not break the ingestion run.
+    """
     try:
-        resp = requests.get(
-            GECKOTERMINAL_TOKEN_INFO_URL.format(address=address),
-            headers={"x-cg-pro-api-key": COINGECKO_API_KEY},
-            timeout=10,
-        )
+        if COINGECKO_API_KEY:
+            resp = requests.get(
+                GECKOTERMINAL_PRO_URL.format(address=address),
+                headers={"x-cg-pro-api-key": COINGECKO_API_KEY},
+                timeout=10,
+            )
+        else:
+            resp = requests.get(
+                GECKOTERMINAL_FREE_URL.format(address=address),
+                timeout=10,
+            )
         if resp.status_code != 200:
             return None
         return resp.json().get("data", {}).get("attributes")
@@ -130,10 +164,50 @@ def _gecko_token_info(address: str) -> dict | None:
         return None
 
 
+def _dexscreener_token_info(address: str) -> dict | None:
+    """
+    Query Dexscreener's free/keyless token endpoint. Returns the first
+    pair whose chainId looks like Arc, or None if nothing matches (address
+    not traded anywhere Dexscreener indexes, or the request fails). Never
+    raises — same fail-safe contract as _gecko_token_info().
+
+    NOTE: Dexscreener's exact chainId slug for Arc hasn't been confirmed
+    against a live response yet — the check below tries a few plausible
+    values. If none match the real slug, this always returns None (no
+    crash, just contributes nothing). The first time this actually returns
+    a nonempty `pairs` list, log/inspect the real chainId value and narrow
+    this set to just that.
+    """
+    try:
+        resp = requests.get(
+            DEXSCREENER_TOKEN_URL.format(address=address),
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        pairs = resp.json().get("pairs") or []
+        plausible_arc_slugs = {"arc", "arc-network", "arcmainnet", "circle-arc"}
+        for pair in pairs:
+            if (pair.get("chainId") or "").lower() in plausible_arc_slugs:
+                return pair
+        return None
+    except requests.RequestException:
+        return None
+
+
 def classify_one(address: str) -> dict:
-    """Classify a single candidate contract. Returns a dict with
+    """
+    Classify a single candidate contract, trying each source in order and
+    stopping at the first hit. Returns a dict with
     category/gecko_symbol/gecko_name/gecko_score/gecko_is_honeypot,
-    category=None if no real signal was found."""
+    category=None if NO source found a signal (this row then goes to
+    needs_review for manual admin classification — see
+    classify_candidates()).
+
+    Order: known infra (free, instant, no API call) -> CoinGecko/
+    GeckoTerminal onchain (token + pool data) -> Dexscreener (independent
+    pool index).
+    """
     address = address.lower()
 
     if address in KNOWN_INFRA_CONTRACTS:
@@ -145,20 +219,33 @@ def classify_one(address: str) -> dict:
             "gecko_is_honeypot": None,
         }
 
-    attrs = _gecko_token_info(address)
-    if attrs:
+    gecko_attrs = _gecko_token_info(address)
+    if gecko_attrs:
         return {
             "category": "token",
-            "gecko_symbol": attrs.get("symbol"),
-            "gecko_name": attrs.get("name"),
-            "gecko_score": attrs.get("gt_score"),
-            "gecko_is_honeypot": str(attrs.get("is_honeypot")),
+            "gecko_symbol": gecko_attrs.get("symbol"),
+            "gecko_name": gecko_attrs.get("name"),
+            "gecko_score": gecko_attrs.get("gt_score"),
+            "gecko_is_honeypot": str(gecko_attrs.get("is_honeypot")),
         }
 
-    # No GeckoTerminal-indexed token (no pool yet) and not known infra.
-    # TODO: event-topic heuristic here (does it look like a DEX pool
-    # from its Transfer/Swap event shape in gas_events/token_flows?)
-    # before giving up — not yet implemented, this is the next piece.
+    dex_pair = _dexscreener_token_info(address)
+    if dex_pair:
+        base = dex_pair.get("baseToken") or {}
+        return {
+            "category": "token",
+            "gecko_symbol": base.get("symbol"),
+            "gecko_name": base.get("name"),
+            "gecko_score": None,
+            "gecko_is_honeypot": None,
+        }
+
+    # No signal from any source. TODO: event-topic heuristic here (does it
+    # look like a DEX pool from its Transfer/Swap event shape in
+    # gas_events/token_flows?) — not yet implemented. Until then this
+    # candidate goes to needs_review with category=NULL — the manual admin
+    # review queue (docs/AUDIT.md) is the real fallback, not another
+    # automated source.
     return {
         "category": None,
         "gecko_symbol": None,
@@ -169,8 +256,16 @@ def classify_one(address: str) -> dict:
 
 
 def classify_candidates(db=None) -> int:
-    """Classify every 'unclassified' candidate at or above
-    CALL_COUNT_THRESHOLD. Returns the number classified this run."""
+    """
+    Classify every 'unclassified' candidate at or above
+    CALL_COUNT_THRESHOLD. Returns the number classified this run.
+
+    Every candidate checked here moves to 'needs_review' regardless of
+    outcome (fixed 2026-09-30 — see module docstring): category filled in
+    on a hit, or NULL on a miss. A miss means "checked once, no automated
+    source found anything" — it's the manual-review queue's job from here,
+    not another automatic re-check next run.
+    """
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -187,11 +282,10 @@ def classify_candidates(db=None) -> int:
     for row in candidates:
         addr = row["contract_address"]
         result = classify_one(addr)
-        new_status = "needs_review" if result["category"] else "unclassified"
         db.table("discovered_contracts").update(
             {
                 **result,
-                "status": new_status,
+                "status": "needs_review",
                 "classified_at": now,
                 "updated_at": now,
             }
@@ -222,8 +316,6 @@ def promote_ready_candidates(db=None) -> int:
     promoted = 0
     for row in ready:
         addr = row["contract_address"]
-        # slug: prefer the gecko symbol/name if we have one, else the
-        # address itself — never block promotion on naming.
         slug_source = (row.get("gecko_symbol") or row.get("gecko_name") or addr).lower()
         project_id = "".join(c if c.isalnum() else "-" for c in slug_source).strip("-")
 
