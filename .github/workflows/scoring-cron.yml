@@ -28,3 +28,17 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Added 2026-09-27: tvl.py now queries live on-chain balances
+          # (see scoring/tvl.py's module docstring for why) instead of
+          # deriving TVL from stored token_flows history, so this job needs
+          # RPC access for the first time. Reuses the same dedicated-endpoint
+          # secrets ingestion-cron.yml already has — tvl.py's own small pool
+          # (separate from ingestion/worker.py's, see its docstring) picks
+          # up whichever of these are set and falls back to the free
+          # mirrors otherwise. Call volume here is tiny compared to
+          # ingestion (a handful of projects x contracts x 3 tokens, once
+          # per run), so this is unlikely to meaningfully compete for quota.
+          ARC_RPC_URL: ${{ secrets.ARC_RPC_URL }}
+          ALCHEMY_ARC_RPC_URL: ${{ secrets.ALCHEMY_ARC_RPC_URL }}
+          DRPC_ARC_RPC_URL: ${{ secrets.DRPC_ARC_RPC_URL }}
+          QUICKNODE_ARC_RPC_URL: ${{ secrets.QUICKNODE_ARC_RPC_URL }}

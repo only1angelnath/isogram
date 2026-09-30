@@ -13,6 +13,15 @@ import os
 
 from supabase import Client, create_client
 
+# PostgREST (Supabase's REST layer) caps a single response at this many rows
+# by default (db-max-rows), silently — a query matching more rows than this
+# just returns the first PAGE_SIZE with no error. Confirmed live 2026-09-27:
+# total_tx_7d was stuck at exactly 1000 regardless of real 7-day volume,
+# because fetch_gas_events_since had no pagination at all. Every fetch
+# function below now pages through with .range() until a page comes back
+# shorter than PAGE_SIZE (the signal there's nothing left).
+PAGE_SIZE = 1000
+
 
 def get_client() -> Client:
     """
@@ -30,6 +39,28 @@ def get_client() -> Client:
     return create_client(url, key)
 
 
+def _fetch_all_pages(build_query):
+    """
+    Page through a PostgREST query past its default PAGE_SIZE row cap.
+    `build_query` is a zero-arg callable that returns a FRESH query builder
+    each call (Supabase's query objects are single-use) — e.g.
+    `lambda: client.table("gas_events").select("...").gte("ts", since_iso)`.
+    Applies .range() on top of whatever filters build_query() already set,
+    and stops once a page comes back with fewer than PAGE_SIZE rows.
+    """
+    rows: list[dict] = []
+    start = 0
+    while True:
+        end = start + PAGE_SIZE - 1
+        result = build_query().range(start, end).execute()
+        page = result.data or []
+        rows.extend(page)
+        if len(page) < PAGE_SIZE:
+            break
+        start += PAGE_SIZE
+    return rows
+
+
 def fetch_projects(client: Client) -> list[dict]:
     """All tracked projects: id, contracts, created_at."""
     result = client.table("projects").select("id, contracts, created_at").execute()
@@ -37,14 +68,10 @@ def fetch_projects(client: Client) -> list[dict]:
 
 
 def fetch_gas_events_since(client: Client, since_iso: str) -> list[dict]:
-    """gas_events rows with ts >= since_iso: project_id, usdc_gas_paid."""
-    result = (
-        client.table("gas_events")
-        .select("project_id, usdc_gas_paid")
-        .gte("ts", since_iso)
-        .execute()
+    """gas_events rows with ts >= since_iso: project_id, usdc_gas_paid. Paginated (see PAGE_SIZE)."""
+    return _fetch_all_pages(
+        lambda: client.table("gas_events").select("project_id, usdc_gas_paid").gte("ts", since_iso)
     )
-    return result.data or []
 
 
 def fetch_token_flows_since(client: Client, since_iso: str) -> list[dict]:
@@ -52,28 +79,13 @@ def fetch_token_flows_since(client: Client, since_iso: str) -> list[dict]:
     token_flows rows with ts >= since_iso. Used for unique_users_7d (see
     docs/decisions/ADR-002-scoring-formula.md) and, network-wide, for
     total_volume_7d (usd_value) — see compute_scores.py's
-    build_network_stats().
+    build_network_stats(). Paginated (see PAGE_SIZE).
     """
-    result = (
-        client.table("token_flows")
-        .select("token_address, from_address, to_address, amount, usd_value, ts")
-        .gte("ts", since_iso)
-        .execute()
+    return _fetch_all_pages(
+        lambda: client.table("token_flows").select(
+            "token_address, from_address, to_address, amount, usd_value, ts"
+        ).gte("ts", since_iso)
     )
-    return result.data or []
-
-
-def fetch_all_token_flows(client: Client) -> list[dict]:
-    """
-    Every token_flows row, all-time. Used for TVL (scoring/tvl.py), which
-    needs a contract's full net balance, not just the trailing 7-day window.
-    """
-    result = (
-        client.table("token_flows")
-        .select("token_address, from_address, to_address, amount")
-        .execute()
-    )
-    return result.data or []
 
 
 def upsert_project_scores(client: Client, rows: list[dict]) -> None:

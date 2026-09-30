@@ -5,10 +5,14 @@ Run periodically (GitHub Actions cron, less frequent than ingestion — see
 docs/ARCHITECTURE.md §2.4). Each run:
   1. Reads all tracked projects.
   2. Reads gas_events and token_flows for the trailing 7 days (usdc_gas_7d,
-     unique_users_7d) and all-time token_flows (for TVL).
-  3. Computes each project's raw metrics, normalizes them relative to each
+     unique_users_7d).
+  3. Queries each project's CURRENT on-chain token balances for TVL (see
+     tvl.py — rewritten 2026-09-27 to stop depending on all-time
+     token_flows history, which is no longer safe to assume is complete
+     now that retention pruning exists).
+  4. Computes each project's raw metrics, normalizes them relative to each
      other, and combines them into one score (scoring.py).
-  4. Writes one project_scores row per project for this run.
+  5. Writes one project_scores row per project for this run.
 
 Usage:
     python compute_scores.py
@@ -24,7 +28,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from db import (
-    fetch_all_token_flows,
     fetch_gas_events_since,
     fetch_projects,
     fetch_token_flows_since,
@@ -33,7 +36,7 @@ from db import (
     upsert_project_scores,
 )
 from scoring import compute_score, contract_age_bonus
-from tvl import calculate_project_tvl
+from tvl import fetch_project_tvl_onchain, get_web3_pool
 
 SCORE_WINDOW_DAYS = 7
 
@@ -49,13 +52,14 @@ def build_project_metrics(
     projects: list[dict],
     gas_events_7d: list[dict],
     token_flows_7d: list[dict],
-    all_token_flows: list[dict],
+    rpc_pool: list,
     now: datetime,
 ) -> dict[str, dict]:
     """
-    Pure function: turn raw rows into a {project_id: {metric: value}} dict.
-    Kept separate from the network calls in run() so it's unit-testable
-    without a live database.
+    Pure-ish function: turn raw rows + live on-chain balance queries into a
+    {project_id: {metric: value}} dict. Only the TVL step makes network
+    calls (via rpc_pool) — gas/user metrics are still pure computation over
+    already-fetched rows, kept unit-testable the same way as before.
     """
     gas_by_project: dict[str, Decimal] = {}
     for row in gas_events_7d:
@@ -86,7 +90,10 @@ def build_project_metrics(
         }
         unique_users_7d = Decimal(len(senders))
 
-        tvl_usd = calculate_project_tvl(all_token_flows, contracts)
+        # TVL: live on-chain balance query, not derived from stored history
+        # (see tvl.py's module docstring for why that distinction matters
+        # now that token_flows is retention-pruned).
+        tvl_usd = fetch_project_tvl_onchain(rpc_pool, contracts)
 
         created_at = _parse_ts(project["created_at"]) if project.get("created_at") else now
         age_bonus = contract_age_bonus(created_at, now)
@@ -144,6 +151,11 @@ def build_network_stats(gas_events_7d: list[dict], token_flows_7d: list[dict], c
     tokens only — see ingestion/worker.py's USD_PEGGED_1_TO_1) — an unpriced
     token's raw `amount` is never added into a USD total, that would silently
     mix units.
+
+    Both gas_events_7d and token_flows_7d are now fully paginated (see
+    db.py's PAGE_SIZE / _fetch_all_pages) — before 2026-09-27 these were
+    silently capped at 1000 rows by PostgREST's default, which is why
+    total_tx_7d was stuck at exactly 1000 regardless of real volume.
     """
     total_volume_7d = sum(
         (Decimal(str(flow["usd_value"])) for flow in token_flows_7d if flow.get("usd_value") is not None),
@@ -172,6 +184,7 @@ def run():
     # Fetched before the "any projects?" check below — chain-wide gas/flow
     # activity exists independent of which contracts we've identified as
     # tracked projects, so network_stats should reflect it either way.
+    # Both are now fully paginated — see db.py's PAGE_SIZE.
     gas_events_7d = fetch_gas_events_since(client, since)
     token_flows_7d = fetch_token_flows_since(client, since)
 
@@ -184,9 +197,11 @@ def run():
         print("No tracked projects yet. Nothing to score.")
         return
 
-    all_token_flows = fetch_all_token_flows(client)
+    # TVL is now a live on-chain query (tvl.py), not derived from stored
+    # flow history — no more fetch_all_token_flows() call needed at all.
+    rpc_pool = get_web3_pool()
 
-    metrics = build_project_metrics(projects, gas_events_7d, token_flows_7d, all_token_flows, now)
+    metrics = build_project_metrics(projects, gas_events_7d, token_flows_7d, rpc_pool, now)
     rows = compute_all_scores(metrics, now)
 
     upsert_project_scores(client, rows)
