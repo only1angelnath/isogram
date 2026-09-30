@@ -88,6 +88,36 @@ def fetch_token_flows_since(client: Client, since_iso: str) -> list[dict]:
     )
 
 
+def prune_rows_before(client: Client, table: str, id_column: str, cutoff_iso: str, chunk_size: int = 500) -> int:
+    """
+    Delete rows from `table` with ts < cutoff_iso, in chunks of chunk_size
+    rather than one large statement. Mirrors the reasoning behind
+    ingestion/db.py's UPSERT_CHUNK_SIZE: a single DELETE spanning millions
+    of rows risks the exact same Postgres statement-timeout (57014) that
+    hit the backfill's large upserts. Selects a batch of ids first, deletes
+    just those, and repeats until nothing older than cutoff_iso remains.
+    Returns the total number of rows deleted.
+    """
+    total_deleted = 0
+    while True:
+        batch = (
+            client.table(table)
+            .select(id_column)
+            .lt("ts", cutoff_iso)
+            .limit(chunk_size)
+            .execute()
+        )
+        rows = batch.data or []
+        if not rows:
+            break
+        ids = [row[id_column] for row in rows]
+        client.table(table).delete().in_(id_column, ids).execute()
+        total_deleted += len(ids)
+        if len(rows) < chunk_size:
+            break
+    return total_deleted
+
+
 def upsert_project_scores(client: Client, rows: list[dict]) -> None:
     """
     Insert one project_scores row per project for this computation run. Not

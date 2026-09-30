@@ -13,11 +13,16 @@ docs/ARCHITECTURE.md §2.4). Each run:
   4. Computes each project's raw metrics, normalizes them relative to each
      other, and combines them into one score (scoring.py).
   5. Writes one project_scores row per project for this run.
+  6. Prunes gas_events/token_flows rows older than RETENTION_DAYS (default
+     14) — safe now that TVL no longer depends on all-time flow history
+     (see tvl.py). This is what keeps Supabase's free-tier storage from
+     overrunning again (docs/BUGS.md — happened once already).
 
 Usage:
     python compute_scores.py
 """
 
+import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -32,6 +37,7 @@ from db import (
     fetch_projects,
     fetch_token_flows_since,
     get_client,
+    prune_rows_before,
     upsert_network_stats,
     upsert_project_scores,
 )
@@ -39,6 +45,18 @@ from scoring import compute_score, contract_age_bonus
 from tvl import fetch_project_tvl_onchain, get_web3_pool
 
 SCORE_WINDOW_DAYS = 7
+
+# Retention pruning (2026-09-27, see docs/BUGS.md): gas_events/token_flows
+# were the direct cause of a real Supabase free-tier storage overrun
+# ("Database Size 111%") after a handful of backfill runs. TVL no longer
+# depends on this history (tvl.py now queries live on-chain balances), so
+# pruning rows older than the scoring window is finally safe — nothing else
+# in this codebase reads gas_events/token_flows beyond SCORE_WINDOW_DAYS.
+# A small buffer beyond SCORE_WINDOW_DAYS (rather than pruning at exactly
+# 7 days) avoids ever deleting a row a run still in progress might read.
+# Override with RETENTION_DAYS if this needs tuning against real quota
+# usage.
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
 
 
 def _parse_ts(value) -> datetime:
@@ -206,6 +224,14 @@ def run():
 
     upsert_project_scores(client, rows)
     print(f"Wrote {len(rows)} project_scores rows for computed_at={now.isoformat()}.")
+
+    # Prune LAST, after everything this run needed has already been read
+    # and written — never delete data a run in progress might still use.
+    retention_cutoff = (now - timedelta(days=RETENTION_DAYS)).isoformat()
+    deleted_gas = prune_rows_before(client, "gas_events", "tx_hash", retention_cutoff)
+    deleted_flows = prune_rows_before(client, "token_flows", "id", retention_cutoff)
+    print(f"Pruned rows older than {RETENTION_DAYS}d (before {retention_cutoff}): "
+          f"{deleted_gas} gas_events, {deleted_flows} token_flows.")
 
 
 if __name__ == "__main__":
