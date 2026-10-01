@@ -63,6 +63,19 @@ machinery directly — discovery.py already lives in ingestion/ and shares
 its requirements.txt/secrets, unlike scoring/'s deliberate separation) and
 marks an EOA 'rejected' immediately, without spending any external API
 calls or ever surfacing it in the manual-review queue.
+
+CHANGED 2026-10-01: added explorer.arc.io's own Blockscout API as a THIRD
+classification source, tried first (before CoinGecko/Dexscreener) — it
+turned out to have far better real-world coverage for exactly the
+contracts the token-pool indexers structurally can't see: verified
+periphery/infra contracts (routers, quoters, a proxy to "IntentSettler")
+and proxy-implementation names that reveal templated launchpad clone
+tokens (e.g. "ArgusV4LaunchToken7"). New category "launchpad" keeps
+mass-produced clone tokens from a factory visually/structurally separate
+from independently-built projects; new category "dex" catches verified
+DEX-infra contracts by name keyword (_DEX_INFRA_NAME_KEYWORDS), gated
+behind is_verified=true. Needed a browser-like User-Agent — Cloudflare
+(fronting explorer.arc.io) silently blocks requests' default UA.
 """
 
 import os
@@ -109,6 +122,38 @@ GECKOTERMINAL_FREE_URL = (
 # might have a given Arc pair indexed even if CoinGecko/GeckoTerminal
 # doesn't (or vice versa).
 DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
+
+# Added 2026-10-01: explorer.arc.io's own Blockscout API. Confirmed live to
+# have FAR better coverage than CoinGecko/GeckoTerminal or Dexscreener for
+# exactly the contracts those two miss — verified contract names (incl.
+# proxy implementations), which catches periphery/infra contracts
+# (routers, quoters, settlers) that pure token-pool indexers structurally
+# can never classify (they only see priced ERC-20s with liquidity, not
+# arbitrary verified contracts). Tried FIRST, before the token-only
+# sources, based on this observed efficacy — on the first real batch of 23
+# candidates, Blockscout correctly identified several (UniversalRouter,
+# SwapRouter02, a proxy to IntentSettler, an ArgusV4LaunchToken* clone)
+# that both other sources missed entirely.
+#
+# Cloudflare fronts this domain and silently blocks requests' default
+# User-Agent ("python-requests/x.x") — confirmed live: identical requests
+# succeeded with a browser-like UA and returned nothing at all without one,
+# across all 23 test addresses uniformly. _EXPLORER_HEADERS below is not
+# optional window-dressing, it's required for this to work at all.
+EXPLORER_ADDRESS_INFO_URL = "https://explorer.arc.io/api/v2/addresses/{address}"
+_EXPLORER_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+
+# Substring match (case-insensitive) against a verified contract's own name
+# -> category "dex". Deliberately a flat keyword list, not a hardcoded
+# address list like KNOWN_INFRA_CONTRACTS — these are generic Uniswap-
+# ecosystem-style naming conventions that show up verified by name on
+# Blockscout, not addresses we're independently vouching for one at a time.
+# Still gated behind is_verified=true (see _blockscout_address_info) so a
+# scam contract can't just name itself "FooRouter" to get auto-categorized.
+_DEX_INFRA_NAME_KEYWORDS = (
+    "router", "quoter", "swap", "poolmanager", "positionmanager",
+    "settler", "aggregator", "universalrouter",
+)
 
 
 def _client():
@@ -234,6 +279,101 @@ def _is_eoa(pool: list, sticky: "_StickyPoolIndex", address: str) -> bool:
     return not code or code == b"" or code.hex() in ("", "0x")
 
 
+def _blockscout_address_info(address: str) -> dict | None:
+    """
+    Query explorer.arc.io's Blockscout API. Returns the raw address-info
+    dict on success, or None on any non-200/failure — same fail-safe
+    contract as every other source here. Requires _EXPLORER_HEADERS'
+    browser User-Agent (see its comment above) or Cloudflare silently
+    blocks the request.
+    """
+    try:
+        resp = requests.get(
+            EXPLORER_ADDRESS_INFO_URL.format(address=address),
+            headers=_EXPLORER_HEADERS,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except requests.RequestException:
+        return None
+
+
+def _classify_from_blockscout(info: dict) -> dict | None:
+    """
+    Turn a Blockscout address-info response into a classification result,
+    or None if it doesn't give us anything usable (unverified AND not a
+    recognized token — in which case the caller falls through to the
+    token-pool sources, which occasionally catch something Blockscout's
+    verification-based view misses).
+
+    Category logic, in priority order:
+    1. Token behind an EIP-1167 (or other) proxy whose IMPLEMENTATION name
+       suggests a templated launchpad clone (e.g. "ArgusV4LaunchToken7")
+       -> category "launchpad". Keeps mass-produced clone tokens visually
+       and structurally separate from independently-built projects, per
+       the discussion that drove this — they're real activity, but a
+       different kind of real activity than a project someone wrote from
+       scratch, and lumping hundreds of near-identical clones in with
+       genuine dApps would dilute "what's actually live on Arc" for a
+       grant reviewer.
+    2. Any other recognized ERC-20 token -> category "token" (same shape
+       as the CoinGecko/Dexscreener token results).
+    3. Verified contract whose own name matches a DEX-infra keyword
+       (_DEX_INFRA_NAME_KEYWORDS) -> category "dex". Gated behind
+       is_verified=true so a malicious contract can't just self-name its
+       way into this category.
+    4. Any other verified contract -> category "infra" (generic bucket —
+       verified and real, but not specifically identified as DEX or
+       launchpad machinery).
+    5. Unverified, not a recognized token -> None (let the caller try the
+       remaining sources / fall through to manual review).
+    """
+    is_verified = info.get("is_verified", False)
+    name = info.get("name")
+    token = info.get("token")
+    implementations = info.get("implementations") or []
+    impl_names = " ".join((i.get("name") or "") for i in implementations)
+
+    if token:
+        if "launch" in impl_names.lower():
+            return {
+                "category": "launchpad",
+                "gecko_symbol": token.get("symbol"),
+                "gecko_name": token.get("name"),
+                "gecko_score": None,
+                "gecko_is_honeypot": None,
+            }
+        return {
+            "category": "token",
+            "gecko_symbol": token.get("symbol"),
+            "gecko_name": token.get("name"),
+            "gecko_score": None,
+            "gecko_is_honeypot": None,
+        }
+
+    if is_verified and name:
+        name_lower = name.lower()
+        if any(keyword in name_lower for keyword in _DEX_INFRA_NAME_KEYWORDS):
+            return {
+                "category": "dex",
+                "gecko_symbol": None,
+                "gecko_name": name,
+                "gecko_score": None,
+                "gecko_is_honeypot": None,
+            }
+        return {
+            "category": "infra",
+            "gecko_symbol": None,
+            "gecko_name": name,
+            "gecko_score": None,
+            "gecko_is_honeypot": None,
+        }
+
+    return None
+
+
 def classify_one(address: str) -> dict:
     """
     Classify a single candidate contract, trying each source in order and
@@ -243,9 +383,11 @@ def classify_one(address: str) -> dict:
     needs_review for manual admin classification — see
     classify_candidates()).
 
-    Order: known infra (free, instant, no API call) -> CoinGecko/
-    GeckoTerminal onchain (token + pool data) -> Dexscreener (independent
-    pool index).
+    Order: known infra (free, instant, no API call) -> Blockscout
+    (explorer.arc.io — verified-name + proxy-implementation data; tried
+    first based on observed efficacy, see EXPLORER_ADDRESS_INFO_URL's
+    comment) -> CoinGecko/GeckoTerminal onchain (token + pool data) ->
+    Dexscreener (independent pool index).
     """
     address = address.lower()
 
@@ -257,6 +399,12 @@ def classify_one(address: str) -> dict:
             "gecko_score": None,
             "gecko_is_honeypot": None,
         }
+
+    blockscout_info = _blockscout_address_info(address)
+    if blockscout_info:
+        result = _classify_from_blockscout(blockscout_info)
+        if result:
+            return result
 
     gecko_attrs = _gecko_token_info(address)
     if gecko_attrs:
