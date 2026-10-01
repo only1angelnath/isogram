@@ -593,9 +593,13 @@ def run():
     print(f"Done. Wrote {len(all_gas_events)} gas events, {len(all_token_flows)} token flows. Checkpoint now at {end_block}.")
 
 
-from discovery import run_discovery
-
 if __name__ == "__main__":
+    from discovery import run_discovery  # imported here, not at module level,
+    # to avoid a circular import — discovery.py now imports worker.py's RPC
+    # pool machinery (get_web3_pool, _StickyPoolIndex, _call_on_pool) for
+    # its EOA check, so worker.py can't import discovery at module level
+    # anymore without both modules trying to fully load each other first.
+
     start = time.monotonic()
     try:
         run()
