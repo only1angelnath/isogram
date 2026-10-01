@@ -70,6 +70,7 @@ from datetime import datetime, timezone
 
 import requests
 from supabase import create_client
+from web3 import Web3
 
 from worker import _StickyPoolIndex, _call_on_pool, get_web3_pool
 
@@ -221,8 +222,15 @@ def _is_eoa(pool: list, sticky: "_StickyPoolIndex", address: str) -> bool:
     _call_on_pool so this gets the same retry/backoff and sticky-endpoint
     behavior as every other RPC call in this codebase, not a separate
     ad-hoc implementation.
+
+    web3.py validates addresses passed to eth_* calls as checksummed
+    (EIP-55) and raises InvalidAddress otherwise — confirmed live
+    2026-09-30, same issue scoring/tvl.py hit on eth_call. contract_address
+    is stored lowercase throughout this codebase (ingestion/worker.py,
+    discovered_contracts), so it must be checksummed here, not upstream.
     """
-    code = _call_on_pool(pool, sticky, "get_code", address)
+    checksummed = Web3.to_checksum_address(address)
+    code = _call_on_pool(pool, sticky, "get_code", checksummed)
     return not code or code == b"" or code.hex() in ("", "0x")
 
 
