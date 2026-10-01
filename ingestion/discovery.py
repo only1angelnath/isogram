@@ -45,7 +45,24 @@ onchain data — CoinGecko acquired GeckoTerminal — just paid vs. free tier;
 this now falls back to the free public endpoint when COINGECKO_PRO_API_KEY
 isn't set, instead of skipping classification entirely). Arkham was
 considered and dropped: paid-only, and no confirmed Arc coverage, unlike
-CoinGecko/GeckoTerminal/Dexscreener which reportedly do have real Arc data.
+CoinGecko/GeckoTerminal/Dexscreener which reportedly do have real Arc data
+— confirmed directly: GeckoTerminal's network ID for Arc is literally
+"arc" (verified against /onchain/networks with a real key), so a wrong
+network slug was ruled out as the cause of the 0% hit rate seen on the
+first 21 needs_review candidates.
+
+CHANGED 2026-09-30 (again): manual inspection of those 21 candidates on
+explorer.arc.io found some are plain EOAs (wallet addresses), not
+contracts at all — upsert_unmapped_contracts() pulls every
+gas_events.to_address with no project_id indiscriminately, contract or
+not. No classification source can ever find a token/pool/entity for a
+wallet address, so these were guaranteed misses regardless of which
+external APIs get added. Fixed: classify_candidates() now checks
+eth_getCode first (reusing worker.py's RPC pool/retry/sticky-endpoint
+machinery directly — discovery.py already lives in ingestion/ and shares
+its requirements.txt/secrets, unlike scoring/'s deliberate separation) and
+marks an EOA 'rejected' immediately, without spending any external API
+calls or ever surfacing it in the manual-review queue.
 """
 
 import os
@@ -53,6 +70,8 @@ from datetime import datetime, timezone
 
 import requests
 from supabase import create_client
+
+from worker import _StickyPoolIndex, _call_on_pool, get_web3_pool
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
@@ -195,6 +214,18 @@ def _dexscreener_token_info(address: str) -> dict | None:
         return None
 
 
+def _is_eoa(pool: list, sticky: "_StickyPoolIndex", address: str) -> bool:
+    """
+    True if `address` has no contract bytecode (a plain wallet), via
+    eth_getCode. Empty result ("0x" / b"") means EOA. Reuses worker.py's
+    _call_on_pool so this gets the same retry/backoff and sticky-endpoint
+    behavior as every other RPC call in this codebase, not a separate
+    ad-hoc implementation.
+    """
+    code = _call_on_pool(pool, sticky, "get_code", address)
+    return not code or code == b"" or code.hex() in ("", "0x")
+
+
 def classify_one(address: str) -> dict:
     """
     Classify a single candidate contract, trying each source in order and
@@ -260,14 +291,18 @@ def classify_candidates(db=None) -> int:
     Classify every 'unclassified' candidate at or above
     CALL_COUNT_THRESHOLD. Returns the number classified this run.
 
-    Every candidate checked here moves to 'needs_review' regardless of
-    outcome (fixed 2026-09-30 — see module docstring): category filled in
-    on a hit, or NULL on a miss. A miss means "checked once, no automated
-    source found anything" — it's the manual-review queue's job from here,
-    not another automatic re-check next run.
+    Every candidate checked here moves to a terminal state regardless of
+    outcome (fixed 2026-09-30 — see module docstring): 'rejected' if it's a
+    plain EOA (no bytecode — checked first, before spending any external
+    API call), else 'needs_review' with category filled in on a
+    classification hit or NULL on a miss. A miss means "checked once, no
+    automated source found anything" — it's the manual-review queue's job
+    from here, not another automatic re-check next run.
     """
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
+    pool = get_web3_pool()
+    sticky = _StickyPoolIndex()
 
     resp = (
         db.table("discovered_contracts")
@@ -281,6 +316,18 @@ def classify_candidates(db=None) -> int:
     classified = 0
     for row in candidates:
         addr = row["contract_address"]
+
+        if _is_eoa(pool, sticky, addr):
+            db.table("discovered_contracts").update(
+                {
+                    "status": "rejected",
+                    "classified_at": now,
+                    "updated_at": now,
+                }
+            ).eq("contract_address", addr).execute()
+            classified += 1
+            continue
+
         result = classify_one(addr)
         db.table("discovered_contracts").update(
             {
