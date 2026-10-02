@@ -360,12 +360,18 @@ def get_web3_pool() -> list:
         try:
             request_kwargs = {"headers": spec["headers"]} if spec["headers"] else {}
             w3 = Web3(Web3.HTTPProvider(spec["url"], request_kwargs=request_kwargs))
-            if w3.is_connected():
-                pool.append(w3)
-            else:
-                print(f"RPC endpoint not connected, skipping: {spec['name']}", file=sys.stderr)
+            # is_connected() swallows the real error and just returns False —
+            # confirmed live 2026-10-02: blockdaemon has failed this check
+            # repeatedly with a key independently confirmed valid via curl,
+            # and we had no way to see why. Doing a real eth_chainId call
+            # instead surfaces the actual exception (e.g. an auth header
+            # not making it through is_connected()'s lightweight probe in
+            # this web3.py version, vs. a real network failure) so this is
+            # diagnosable instead of a permanent silent guess.
+            w3.eth.chain_id
+            pool.append(w3)
         except Exception as exc:
-            print(f"RPC endpoint failed connectivity check, skipping: {spec['name']} ({exc})", file=sys.stderr)
+            print(f"RPC endpoint failed connectivity check, skipping: {spec['name']} ({type(exc).__name__}: {exc})", file=sys.stderr)
     if not pool:
         tried = ", ".join(s["name"] for s in specs)
         raise RuntimeError(f"No Arc RPC endpoints reachable (tried: {tried})")
