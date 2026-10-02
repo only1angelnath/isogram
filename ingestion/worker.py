@@ -113,7 +113,16 @@ def _dedicated_endpoint_specs() -> list:
         specs.append({
             "name": "blockdaemon",
             "url": blockdaemon_url,
-            "headers": {"Authorization": f"Bearer {blockdaemon_key}"},
+            # Content-Type included explicitly: confirmed live 2026-10-02
+            # that passing only "Authorization" here REPLACES web3.py's
+            # default headers dict rather than merging with it, dropping
+            # Content-Type: application/json and causing Blockdaemon to
+            # reject every request with 415 Unsupported Media Type — not
+            # an auth problem at all, despite how it looked for days.
+            "headers": {
+                "Authorization": f"Bearer {blockdaemon_key}",
+                "Content-Type": "application/json",
+            },
         })
     elif blockdaemon_url or blockdaemon_key:
         print(
