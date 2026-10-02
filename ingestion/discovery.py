@@ -503,7 +503,23 @@ def promote_ready_candidates(db=None) -> int:
     projects. The hybrid gate: call_count >= CALL_COUNT_THRESHOLD
     (already true to have reached 'needs_review') AND category is set
     (real classification signal, not just volume). Returns the number
-    promoted this run."""
+    promoted this run.
+
+    CHANGED 2026-10-02: a discovered contract's slug ("usyc", from a
+    classification source returning symbol "USYC") silently collided with
+    the real, manually-seeded USYC project — upsert(on_conflict="id")
+    overwrote its name/category/contracts with an impostor's data, no
+    error, no warning. This is exactly the squatting/impersonation risk
+    docs/SCHEMA.md already flagged for well-known addresses, just hitting
+    name collision instead of address collision. Fixed: promotion now
+    checks for an existing project at that id FIRST. If one exists with a
+    DIFFERENT contract address, this is treated as a probable impersonator
+    — the candidate is marked 'rejected' (not promoted, not left stuck in
+    needs_review either) and the real project is never touched. A
+    collision where the contract address actually matches (the same
+    project rediscovering itself, e.g. after a schema change) is allowed
+    through as a genuine update.
+    """
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -517,10 +533,37 @@ def promote_ready_candidates(db=None) -> int:
     ready = resp.data or []
 
     promoted = 0
+    collisions_rejected = 0
     for row in ready:
         addr = row["contract_address"]
         slug_source = (row.get("gecko_symbol") or row.get("gecko_name") or addr).lower()
         project_id = "".join(c if c.isalnum() else "-" for c in slug_source).strip("-")
+
+        existing = db.table("projects").select("id, contracts").eq("id", project_id).execute()
+        if existing.data:
+            existing_contracts = [c.lower() for c in (existing.data[0].get("contracts") or [])]
+            if addr.lower() not in existing_contracts:
+                # Slug collision with a DIFFERENT contract than the one
+                # already tracked under this id — do not overwrite. Likely
+                # an impersonator (same name/symbol as a real project, or
+                # a slug coincidence with an unrelated already-promoted
+                # discovery). Reject rather than silently corrupt the
+                # existing project or sit stuck in needs_review forever.
+                db.table("discovered_contracts").update(
+                    {
+                        "status": "rejected",
+                        "updated_at": now,
+                    }
+                ).eq("contract_address", addr).execute()
+                print(
+                    f"discovery: REJECTED {addr} — slug '{project_id}' already used by a "
+                    f"different contract ({existing_contracts}); likely impersonation/collision, "
+                    f"not overwriting the existing project."
+                )
+                collisions_rejected += 1
+                continue
+            # Same contract already tracked under this id — fall through
+            # to the upsert below as a legitimate refresh, not a collision.
 
         db.table("projects").upsert(
             {
@@ -542,6 +585,9 @@ def promote_ready_candidates(db=None) -> int:
             }
         ).eq("contract_address", addr).execute()
         promoted += 1
+
+    if collisions_rejected:
+        print(f"discovery: {collisions_rejected} slug collision(s) rejected this run — see REJECTED lines above.")
 
     return promoted
 
