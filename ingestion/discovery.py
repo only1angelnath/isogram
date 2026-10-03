@@ -143,17 +143,58 @@ DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}
 EXPLORER_ADDRESS_INFO_URL = "https://explorer.arc.io/api/v2/addresses/{address}"
 _EXPLORER_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
-# Substring match (case-insensitive) against a verified contract's own name
-# -> category "dex". Deliberately a flat keyword list, not a hardcoded
-# address list like KNOWN_INFRA_CONTRACTS — these are generic Uniswap-
-# ecosystem-style naming conventions that show up verified by name on
-# Blockscout, not addresses we're independently vouching for one at a time.
-# Still gated behind is_verified=true (see _blockscout_address_info) so a
-# scam contract can't just name itself "FooRouter" to get auto-categorized.
-_DEX_INFRA_NAME_KEYWORDS = (
-    "router", "quoter", "swap", "poolmanager", "positionmanager",
-    "settler", "aggregator", "universalrouter",
+# DeFiLlama-style category taxonomy (2026-10-02), shared across every
+# classification source (Blockscout verified names, CoinGecko/GeckoTerminal
+# token metadata, Dexscreener pairs) instead of each one hardcoding its own
+# generic "token"/"infra"/"dex". One category column still covers both
+# "protocol type" (dex, bridge, oracle, lending...) and "token type"
+# (stablecoin, meme, governance...) — a discovered contract becomes exactly
+# one projects row either way, so one richer vocabulary does the job
+# without a schema change.
+#
+# Matched via substring, case-insensitive, against whatever name/symbol a
+# source actually returned — deliberately keyword-based, not an address
+# list like KNOWN_INFRA_CONTRACTS, since these are generic naming
+# conventions, not addresses we're independently vouching for one at a
+# time. The DEX keyword match additionally requires is_verified=true when
+# checked against Blockscout (see _classify_from_blockscout) so a scam
+# contract can't just name itself "FooRouter" to get auto-categorized —
+# CoinGecko/Dexscreener hits are already gated by being real indexed
+# tokens/pairs, so no separate verified-flag exists to check there.
+#
+# Order matters: first matching category wins, checked top to bottom, so
+# more specific categories are listed before more generic ones (e.g.
+# "liquid-staking" before a bare "staking" catch-all would be, if one
+# existed — kept this list to patterns actually worth distinguishing for
+# an Arc-stage chain rather than DeFiLlama's full ~30-category breadth).
+_CATEGORY_NAME_KEYWORDS = (
+    ("bridge", ("bridge", "bridged", "portal")),
+    ("oracle", ("oracle", "pricefeed", "price-feed")),
+    ("liquid-staking", ("liquidstaking", "liquid staking", "lst", "steth", "lsteth")),
+    ("lending", ("lend", "cdp", "vault", "comptroller")),
+    ("yield", ("yield", "farm", "harvest")),
+    ("dex", ("router", "quoter", "swap", "poolmanager", "positionmanager", "settler", "aggregator", "universalrouter")),
+    ("governance", ("governance", "dao", "timelock", "votingescrow", "gauge")),
+    ("stablecoin", ("usd", "stable", "dollar")),
+    ("wrapped", ("wrapped", "bridged weth", "weth")),
+    ("meme", ("meme", "doge", "shib", "pepe", "inu", "moon", "elon")),
 )
+
+
+def _infer_category(name: str | None, symbol: str | None, default: str = "token") -> str:
+    """
+    Shared DeFiLlama-style category inference: check name and symbol
+    (lowercased) against _CATEGORY_NAME_KEYWORDS in order, return the first
+    match, or `default` if nothing matches. Used by every classification
+    source so a token named e.g. "USD Coin Bridge" gets the same category
+    regardless of whether CoinGecko, Dexscreener, or Blockscout was the
+    source that found it.
+    """
+    haystack = f"{name or ''} {symbol or ''}".lower()
+    for category, keywords in _CATEGORY_NAME_KEYWORDS:
+        if any(kw in haystack for kw in keywords):
+            return category
+    return default
 
 
 def _client():
@@ -199,6 +240,109 @@ def upsert_unmapped_contracts(db=None) -> int:
         ).execute()
 
     return len(agg)
+
+
+GECKOTERMINAL_TRENDING_PRO_URL = (
+    "https://pro-api.coingecko.com/api/v3/onchain/networks/arc/trending_pools?page={page}"
+)
+GECKOTERMINAL_TRENDING_FREE_URL = (
+    "https://api.coingecko.com/api/v3/onchain/networks/arc/trending_pools?page={page}"
+)
+# How many pages of trending pools to pull per discovery run. Cheap and
+# idempotent to repeat every cycle (just bumps call_count/timestamps on
+# already-known candidates), so no need to track "already seen" state —
+# capped to keep each run's API usage bounded.
+GECKOTERMINAL_TRENDING_PAGES = int(os.environ.get("GECKOTERMINAL_TRENDING_PAGES", "3"))
+
+
+def fetch_trending_pool_candidates(db=None) -> int:
+    """
+    Proactively seed discovered_contracts from GeckoTerminal's trending
+    Arc pools, instead of relying solely on organic gas_events volume
+    crossing CALL_COUNT_THRESHOLD. A pool that's genuinely trending on
+    GeckoTerminal is real, externally-validated activity — worth fast-
+    tracking into the classification pipeline rather than waiting for our
+    own ingestion to independently accumulate enough call_count on the
+    same contract.
+
+    Every token address found this way still goes through the exact same
+    discovered_contracts -> classify_candidates -> promote_ready_candidates
+    pipeline as organically-discovered contracts — same EOA filter, same
+    classification sources, same collision protection against overwriting
+    an existing project (see promote_ready_candidates' 2026-10-02 fix).
+    This function only ever upserts into discovered_contracts; it never
+    touches projects directly, so none of today's safety work is bypassed.
+
+    Sets call_count to CALL_COUNT_THRESHOLD directly (not accumulated
+    organically) so a trending pool's tokens are eligible for
+    classification on the very next classify_candidates() pass — clearly
+    a synthetic value, not a real observed call count, which is why this
+    is kept as a separate function rather than folded into
+    upsert_unmapped_contracts() (which reflects real gas_events activity).
+    Returns the number of distinct token addresses touched this run.
+    """
+    db = db or _client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    addresses: set[str] = set()
+
+    for page in range(1, GECKOTERMINAL_TRENDING_PAGES + 1):
+        try:
+            if COINGECKO_API_KEY:
+                resp = requests.get(
+                    GECKOTERMINAL_TRENDING_PRO_URL.format(page=page),
+                    headers={"x-cg-pro-api-key": COINGECKO_API_KEY},
+                    timeout=10,
+                )
+            else:
+                resp = requests.get(
+                    GECKOTERMINAL_TRENDING_FREE_URL.format(page=page),
+                    timeout=10,
+                )
+            if resp.status_code != 200:
+                break
+            payload = resp.json()
+        except (requests.RequestException, ValueError):
+            break
+
+        included = payload.get("included") or []
+        if not included:
+            break  # no more pages / nothing returned
+
+        for item in included:
+            if item.get("type") != "token":
+                continue
+            addr = (item.get("attributes") or {}).get("address")
+            if addr:
+                addresses.add(addr.lower())
+
+    if not addresses:
+        return 0
+
+    # Fetch existing rows for these addresses first so this never regresses
+    # a real, organically-accumulated call_count downward, and never
+    # overwrites a genuinely earlier first_seen with "now".
+    existing_resp = (
+        db.table("discovered_contracts")
+        .select("contract_address, call_count, first_seen")
+        .in_("contract_address", list(addresses))
+        .execute()
+    )
+    existing_by_addr = {row["contract_address"]: row for row in (existing_resp.data or [])}
+
+    for addr in addresses:
+        existing = existing_by_addr.get(addr)
+        db.table("discovered_contracts").upsert(
+            {
+                "contract_address": addr,
+                "call_count": max(CALL_COUNT_THRESHOLD, (existing or {}).get("call_count", 0)),
+                "first_seen": (existing or {}).get("first_seen") or now_iso,
+                "last_seen": now_iso,
+                "updated_at": now_iso,
+            },
+            on_conflict="contract_address",
+        ).execute()
+
+    return len(addresses)
 
 
 def _gecko_token_info(address: str) -> dict | None:
@@ -311,23 +455,26 @@ def _classify_from_blockscout(info: dict) -> dict | None:
     Category logic, in priority order:
     1. Token behind an EIP-1167 (or other) proxy whose IMPLEMENTATION name
        suggests a templated launchpad clone (e.g. "ArgusV4LaunchToken7")
-       -> category "launchpad". Keeps mass-produced clone tokens visually
-       and structurally separate from independently-built projects, per
-       the discussion that drove this — they're real activity, but a
-       different kind of real activity than a project someone wrote from
-       scratch, and lumping hundreds of near-identical clones in with
+       -> category "launchpad", ALWAYS — this overrides _infer_category
+       even if the token's own name/symbol would otherwise match e.g.
+       "meme" or "stablecoin", because launchpad-clone provenance is a
+       more useful signal for this dashboard than the token's surface
+       branding. Keeps mass-produced clone tokens visually and
+       structurally separate from independently-built projects — they're
+       real activity, but a different kind than a project someone wrote
+       from scratch, and lumping hundreds of near-identical clones in with
        genuine dApps would dilute "what's actually live on Arc" for a
        grant reviewer.
-    2. Any other recognized ERC-20 token -> category "token" (same shape
-       as the CoinGecko/Dexscreener token results).
-    3. Verified contract whose own name matches a DEX-infra keyword
-       (_DEX_INFRA_NAME_KEYWORDS) -> category "dex". Gated behind
-       is_verified=true so a malicious contract can't just self-name its
-       way into this category.
-    4. Any other verified contract -> category "infra" (generic bucket —
-       verified and real, but not specifically identified as DEX or
-       launchpad machinery).
-    5. Unverified, not a recognized token -> None (let the caller try the
+    2. Any other recognized ERC-20 token -> category inferred from its
+       name/symbol via the shared DeFiLlama-style taxonomy
+       (_infer_category) — "stablecoin", "meme", "governance", "wrapped",
+       etc., falling back to generic "token" if nothing matches.
+    3. Verified contract (not a token) -> category inferred from its own
+       verified name via the same taxonomy — catches "dex" (routers,
+       quoters...), "bridge", "oracle", "lending", "yield", "governance"
+       equally, not just DEX as before. Falls back to generic "infra" if
+       verified but nothing matches (same bucket Permit2/EntryPoint use).
+    4. Unverified, not a recognized token -> None (let the caller try the
        remaining sources / fall through to manual review).
     """
     is_verified = info.get("is_verified", False)
@@ -337,34 +484,21 @@ def _classify_from_blockscout(info: dict) -> dict | None:
     impl_names = " ".join((i.get("name") or "") for i in implementations)
 
     if token:
-        if "launch" in impl_names.lower():
-            return {
-                "category": "launchpad",
-                "gecko_symbol": token.get("symbol"),
-                "gecko_name": token.get("name"),
-                "gecko_score": None,
-                "gecko_is_honeypot": None,
-            }
+        symbol = token.get("symbol")
+        token_name = token.get("name")
+        category = "launchpad" if "launch" in impl_names.lower() else _infer_category(token_name, symbol)
         return {
-            "category": "token",
-            "gecko_symbol": token.get("symbol"),
-            "gecko_name": token.get("name"),
+            "category": category,
+            "gecko_symbol": symbol,
+            "gecko_name": token_name,
             "gecko_score": None,
             "gecko_is_honeypot": None,
         }
 
     if is_verified and name:
-        name_lower = name.lower()
-        if any(keyword in name_lower for keyword in _DEX_INFRA_NAME_KEYWORDS):
-            return {
-                "category": "dex",
-                "gecko_symbol": None,
-                "gecko_name": name,
-                "gecko_score": None,
-                "gecko_is_honeypot": None,
-            }
+        category = _infer_category(name, None, default="infra")
         return {
-            "category": "infra",
+            "category": category,
             "gecko_symbol": None,
             "gecko_name": name,
             "gecko_score": None,
@@ -408,10 +542,12 @@ def classify_one(address: str) -> dict:
 
     gecko_attrs = _gecko_token_info(address)
     if gecko_attrs:
+        symbol = gecko_attrs.get("symbol")
+        name = gecko_attrs.get("name")
         return {
-            "category": "token",
-            "gecko_symbol": gecko_attrs.get("symbol"),
-            "gecko_name": gecko_attrs.get("name"),
+            "category": _infer_category(name, symbol),
+            "gecko_symbol": symbol,
+            "gecko_name": name,
             "gecko_score": gecko_attrs.get("gt_score"),
             "gecko_is_honeypot": str(gecko_attrs.get("is_honeypot")),
         }
@@ -419,10 +555,12 @@ def classify_one(address: str) -> dict:
     dex_pair = _dexscreener_token_info(address)
     if dex_pair:
         base = dex_pair.get("baseToken") or {}
+        symbol = base.get("symbol")
+        name = base.get("name")
         return {
-            "category": "token",
-            "gecko_symbol": base.get("symbol"),
-            "gecko_name": base.get("name"),
+            "category": _infer_category(name, symbol),
+            "gecko_symbol": symbol,
+            "gecko_name": name,
             "gecko_score": None,
             "gecko_is_honeypot": None,
         }
@@ -593,16 +731,35 @@ def promote_ready_candidates(db=None) -> int:
 
 
 def run_discovery() -> dict:
-    """Full discovery pass: upsert -> classify -> promote. Call once per
-    ingestion cycle, after the normal block-processing pass."""
+    """
+    Full discovery pass: seed (organic + proactive) -> classify -> promote.
+    Call once per ingestion cycle, after the normal block-processing pass.
+
+    Two independent seeding paths feed the same discovered_contracts table:
+    organic (upsert_unmapped_contracts — real gas_events activity) and
+    proactive (fetch_trending_pool_candidates — GeckoTerminal's trending
+    Arc pools, added 2026-10-02 so real, externally-validated activity
+    doesn't have to wait for our own ingestion to independently rack up
+    enough call_count on the same contract). Both funnel into the exact
+    same classify/promote pipeline, so every safety mechanism (EOA
+    filtering, collision-protected promotion) applies equally to either
+    source.
+    """
     db = _client()
     touched = upsert_unmapped_contracts(db)
+    trending_seeded = fetch_trending_pool_candidates(db)
     classified = classify_candidates(db)
     promoted = promote_ready_candidates(db)
-    return {"touched": touched, "classified": classified, "promoted": promoted}
+    return {
+        "touched": touched,
+        "trending_seeded": trending_seeded,
+        "classified": classified,
+        "promoted": promoted,
+    }
 
 
 if __name__ == "__main__":
     result = run_discovery()
     print(f"Discovery run: {result['touched']} contracts touched, "
+          f"{result['trending_seeded']} seeded from trending pools, "
           f"{result['classified']} classified, {result['promoted']} promoted.")

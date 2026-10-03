@@ -627,11 +627,13 @@ if __name__ == "__main__":
         # should not go unnoticed), but discovery gets its chance first.
         discovery_result = run_discovery()
         print(f"Discovery: {discovery_result['touched']} touched, "
+              f"{discovery_result.get('trending_seeded', 0)} seeded from trending pools, "
               f"{discovery_result['classified']} classified, "
               f"{discovery_result['promoted']} promoted.")
         raise
     discovery_result = run_discovery()
     print(f"Discovery: {discovery_result['touched']} touched, "
+          f"{discovery_result.get('trending_seeded', 0)} seeded from trending pools, "
           f"{discovery_result['classified']} classified, "
           f"{discovery_result['promoted']} promoted.")
     print(f"Finished in {time.monotonic() - start:.1f}s")
