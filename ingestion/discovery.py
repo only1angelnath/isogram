@@ -79,6 +79,7 @@ behind is_verified=true. Needed a browser-like User-Agent — Cloudflare
 """
 
 import os
+import sys
 from datetime import datetime, timezone
 
 import requests
@@ -307,9 +308,15 @@ def fetch_trending_pool_candidates(db=None) -> int:
                     timeout=10,
                 )
             if resp.status_code != 200:
+                print(
+                    f"discovery: trending_pools page {page} returned {resp.status_code}, stopping "
+                    f"(using {'pro' if COINGECKO_API_KEY else 'free'} endpoint): {resp.text[:200]}",
+                    file=sys.stderr,
+                )
                 break
             payload = resp.json()
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError) as exc:
+            print(f"discovery: trending_pools page {page} request failed: {exc}", file=sys.stderr)
             break
 
         included = payload.get("included") or []

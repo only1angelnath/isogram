@@ -37,6 +37,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Added 2026-10-03: this secret existed but was never actually
+          # wired into this workflow's env — discovery.py's
+          # _gecko_token_info() and fetch_trending_pool_candidates() have
+          # been silently running on CoinGecko's free/rate-limited tier in
+          # CI this whole time, not the pro tier, with zero visibility into
+          # that gap until trending-pool seeding stayed at 0 for two runs.
+          COINGECKO_PRO_API_KEY: ${{ secrets.COINGECKO_PRO_API_KEY }}
           # Free/default endpoint — kept as the last-resort fallback in the
           # pool (see ingestion/worker.py). Confirmed to throttle GitHub
           # Actions' source IP specifically (docs/BUGS.md #4/#5).
