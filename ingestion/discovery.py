@@ -243,11 +243,19 @@ def upsert_unmapped_contracts(db=None) -> int:
 
 
 GECKOTERMINAL_TRENDING_PRO_URL = (
-    "https://pro-api.coingecko.com/api/v3/onchain/networks/arc/trending_pools?page={page}"
+    "https://pro-api.coingecko.com/api/v3/onchain/networks/arc/trending_pools"
+    "?page={page}&include=base_token,quote_token"
 )
 GECKOTERMINAL_TRENDING_FREE_URL = (
-    "https://api.coingecko.com/api/v3/onchain/networks/arc/trending_pools?page={page}"
+    "https://api.coingecko.com/api/v3/onchain/networks/arc/trending_pools"
+    "?page={page}&include=base_token,quote_token"
 )
+# NOTE (2026-10-03): confirmed live that GeckoTerminal's JSON:API-style
+# response ONLY populates the top-level "included" array when explicitly
+# asked for it via ?include=... — without this param, included is simply
+# absent, which the original version of this code misread as "no more
+# pages" and broke out on page 1 every time (0 seeded). Don't drop this
+# param "to simplify the URL" without re-verifying the response shape.
 # How many pages of trending pools to pull per discovery run. Cheap and
 # idempotent to repeat every cycle (just bumps call_count/timestamps on
 # already-known candidates), so no need to track "already seen" state —
