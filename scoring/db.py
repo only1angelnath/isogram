@@ -17,9 +17,21 @@ from supabase import Client, create_client
 # by default (db-max-rows), silently — a query matching more rows than this
 # just returns the first PAGE_SIZE with no error. Confirmed live 2026-09-27:
 # total_tx_7d was stuck at exactly 1000 regardless of real 7-day volume,
-# because fetch_gas_events_since had no pagination at all. Every fetch
-# function below now pages through with .range() until a page comes back
-# shorter than PAGE_SIZE (the signal there's nothing left).
+# because fetch_gas_events_since had no pagination at all.
+#
+# CHANGED 2026-10-03: the original fix paginated with .range(start, end) —
+# OFFSET-based. OFFSET pagination gets slower every page: fetching page 290
+# means Postgres scans and discards the first 289,000 rows first, every
+# single call. With gas_events now holding hundreds of thousands of rows in
+# the 7-day window, this hit Postgres's statement timeout (57014) for real,
+# killing the entire scoring run outright (not just one slow page — the
+# whole job crashed on fetch_gas_events_since before computing anything).
+#
+# Fixed with keyset pagination instead: page by "cursor_column > last_seen
+# value" (an indexed, unique column — tx_hash for gas_events' primary key,
+# id for token_flows' bigserial primary key) rather than OFFSET. Every page
+# is an equally-fast indexed range scan regardless of total table size —
+# no scaling cliff as the table grows.
 PAGE_SIZE = 1000
 
 
@@ -39,25 +51,30 @@ def get_client() -> Client:
     return create_client(url, key)
 
 
-def _fetch_all_pages(build_query):
+def _fetch_all_pages_keyset(build_query, cursor_column: str):
     """
-    Page through a PostgREST query past its default PAGE_SIZE row cap.
-    `build_query` is a zero-arg callable that returns a FRESH query builder
-    each call (Supabase's query objects are single-use) — e.g.
-    `lambda: client.table("gas_events").select("...").gte("ts", since_iso)`.
-    Applies .range() on top of whatever filters build_query() already set,
-    and stops once a page comes back with fewer than PAGE_SIZE rows.
+    Page through a PostgREST query past its default PAGE_SIZE row cap using
+    keyset pagination (WHERE cursor_column > last_seen, ORDER BY
+    cursor_column, LIMIT PAGE_SIZE) instead of OFFSET — see PAGE_SIZE's
+    comment for why OFFSET doesn't scale here. `build_query` is a zero-arg
+    callable that returns a FRESH query builder each call (Supabase's query
+    objects are single-use) with whatever filters already applied, but
+    WITHOUT its own .order()/.limit() — those are added here.
+    `cursor_column` must be unique and indexed (a primary key) for this to
+    stay fast and to guarantee every row is seen exactly once.
     """
     rows: list[dict] = []
-    start = 0
+    last_value = None
     while True:
-        end = start + PAGE_SIZE - 1
-        result = build_query().range(start, end).execute()
+        query = build_query()
+        if last_value is not None:
+            query = query.gt(cursor_column, last_value)
+        result = query.order(cursor_column).limit(PAGE_SIZE).execute()
         page = result.data or []
         rows.extend(page)
         if len(page) < PAGE_SIZE:
             break
-        start += PAGE_SIZE
+        last_value = page[-1][cursor_column]
     return rows
 
 
@@ -68,9 +85,15 @@ def fetch_projects(client: Client) -> list[dict]:
 
 
 def fetch_gas_events_since(client: Client, since_iso: str) -> list[dict]:
-    """gas_events rows with ts >= since_iso: project_id, usdc_gas_paid. Paginated (see PAGE_SIZE)."""
-    return _fetch_all_pages(
-        lambda: client.table("gas_events").select("project_id, usdc_gas_paid").gte("ts", since_iso)
+    """
+    gas_events rows with ts >= since_iso: tx_hash, project_id, usdc_gas_paid.
+    Keyset-paginated on tx_hash (the primary key) — see PAGE_SIZE's comment.
+    tx_hash is included in the select solely to serve as the pagination
+    cursor; callers that only need project_id/usdc_gas_paid can ignore it.
+    """
+    return _fetch_all_pages_keyset(
+        lambda: client.table("gas_events").select("tx_hash, project_id, usdc_gas_paid").gte("ts", since_iso),
+        cursor_column="tx_hash",
     )
 
 
@@ -79,12 +102,15 @@ def fetch_token_flows_since(client: Client, since_iso: str) -> list[dict]:
     token_flows rows with ts >= since_iso. Used for unique_users_7d (see
     docs/decisions/ADR-002-scoring-formula.md) and, network-wide, for
     total_volume_7d (usd_value) — see compute_scores.py's
-    build_network_stats(). Paginated (see PAGE_SIZE).
+    build_network_stats(). Keyset-paginated on id (the bigserial primary
+    key) — see PAGE_SIZE's comment. id is included in the select solely to
+    serve as the pagination cursor.
     """
-    return _fetch_all_pages(
+    return _fetch_all_pages_keyset(
         lambda: client.table("token_flows").select(
-            "token_address, from_address, to_address, amount, usd_value, ts"
-        ).gte("ts", since_iso)
+            "id, token_address, from_address, to_address, amount, usd_value, ts"
+        ).gte("ts", since_iso),
+        cursor_column="id",
     )
 
 
