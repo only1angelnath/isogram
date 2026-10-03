@@ -176,7 +176,14 @@ _CATEGORY_NAME_KEYWORDS = (
     ("yield", ("yield", "farm", "harvest")),
     ("dex", ("router", "quoter", "swap", "poolmanager", "positionmanager", "settler", "aggregator", "universalrouter")),
     ("governance", ("governance", "dao", "timelock", "votingescrow", "gauge")),
-    ("stablecoin", ("usd", "stable", "dollar")),
+    # Confirmed live 2026-10-03: USD-only matching here meant EURC's own
+    # contract, if ever reclassified, inferred category "token" instead of
+    # "stablecoin" (no "usd"/"stable"/"dollar" in "EURC"/"EURC Stablecoin"),
+    # which the DB's seeded-project trigger correctly blocked as an
+    # attempted category change — but the uncaught exception crashed the
+    # whole ingestion job (see promote_ready_candidates' try/except fix for
+    # the crash itself; this is the root-cause fix so it stops happening).
+    ("stablecoin", ("usd", "stable", "dollar", "eur", "gbp", "jpy", "cad", "aud", "chf", "cny")),
     ("wrapped", ("wrapped", "bridged weth", "weth")),
     ("meme", ("meme", "doge", "shib", "pepe", "inu", "moon", "elon")),
 )
@@ -717,17 +724,47 @@ def promote_ready_candidates(db=None) -> int:
                 continue
             # Same contract already tracked under this id — fall through
             # to the upsert below as a legitimate refresh, not a collision.
+            # NOTE: this app-level check only compares `contracts`, not
+            # `category` — a same-address row whose newly-inferred category
+            # differs from a SEEDED project's protected category (see the
+            # "seeded" migration) will still reach the upsert below and get
+            # blocked by the database trigger instead. That's intentional:
+            # the DB trigger is the single source of truth for which
+            # columns are protected, so the app doesn't need to duplicate
+            # that knowledge — it just needs to handle the resulting
+            # exception gracefully, which the try/except below does.
 
-        db.table("projects").upsert(
-            {
-                "id": project_id,
-                "name": row.get("gecko_name") or row.get("gecko_symbol") or addr,
-                "contracts": [addr],
-                "category": row["category"],
-                "socials": {},
-            },
-            on_conflict="id",
-        ).execute()
+        try:
+            db.table("projects").upsert(
+                {
+                    "id": project_id,
+                    "name": row.get("gecko_name") or row.get("gecko_symbol") or addr,
+                    "contracts": [addr],
+                    "category": row["category"],
+                    "socials": {},
+                },
+                on_conflict="id",
+            ).execute()
+        except Exception as exc:
+            # Confirmed live 2026-10-03: a trigger-blocked promotion (e.g.
+            # attempting to change a SEEDED project's category — EURC's
+            # real contract got reclassified as generic "token" instead of
+            # "stablecoin" because _infer_category's keyword list was
+            # USD-centric and didn't recognize EUR-pegged tokens) used to
+            # propagate all the way up and crash the entire ingestion job,
+            # even though the actual block-processing work had already
+            # succeeded moments earlier. One bad candidate must never take
+            # down the whole run — reject just this one and keep going.
+            db.table("discovered_contracts").update(
+                {"status": "rejected", "updated_at": now}
+            ).eq("contract_address", addr).execute()
+            print(
+                f"discovery: REJECTED {addr} — promotion to project '{project_id}' failed "
+                f"({exc}); marking rejected and continuing rather than aborting the run.",
+                file=sys.stderr,
+            )
+            collisions_rejected += 1
+            continue
 
         db.table("discovered_contracts").update(
             {
