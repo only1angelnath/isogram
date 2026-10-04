@@ -176,17 +176,36 @@ _CATEGORY_NAME_KEYWORDS = (
     ("yield", ("yield", "farm", "harvest")),
     ("dex", ("router", "quoter", "swap", "poolmanager", "positionmanager", "settler", "aggregator", "universalrouter")),
     ("governance", ("governance", "dao", "timelock", "votingescrow", "gauge")),
-    # Confirmed live 2026-10-03: USD-only matching here meant EURC's own
-    # contract, if ever reclassified, inferred category "token" instead of
-    # "stablecoin" (no "usd"/"stable"/"dollar" in "EURC"/"EURC Stablecoin"),
-    # which the DB's seeded-project trigger correctly blocked as an
-    # attempted category change — but the uncaught exception crashed the
-    # whole ingestion job (see promote_ready_candidates' try/except fix for
-    # the crash itself; this is the root-cause fix so it stops happening).
-    ("stablecoin", ("usd", "stable", "dollar", "eur", "gbp", "jpy", "cad", "aud", "chf", "cny")),
+    # NO stablecoin entry here — see _infer_category's docstring. Confirmed
+    # live 2026-10-03: a naive "usd"/"stable" substring match let real scam
+    # tokens ("usdc is cool", "Usdcjeanphil", "Blockchain USD") get
+    # auto-labeled "stablecoin", lending them false legitimacy right next
+    # to the real USDC/EURC on the dashboard. Stablecoin status is now
+    # NEVER inferred from a name — only the pre-seeded, address-verified
+    # tokens (USDC/EURC/USYC) carry it, and they're DB-trigger-protected
+    # from ever changing it (see the "seeded" migration).
     ("wrapped", ("wrapped", "bridged weth", "weth")),
     ("meme", ("meme", "doge", "shib", "pepe", "inu", "moon", "elon")),
 )
+
+# Name/symbol substrings that mean "reject outright, never promote under
+# ANY category" rather than "classify normally." Added 2026-10-03 after a
+# real batch of discovered contracts included tokens literally named
+# "Circle Internet Group • Arc Token" and "Circle Wrapped Bitcoin" —
+# impersonating Circle, the company behind Arc and real USDC, not just a
+# generic scam. Checked BEFORE _infer_category, so these never reach any
+# category at all, trust-conferring or otherwise. Deliberately narrow
+# (exact brand-impersonation terms) rather than broad enough to catch
+# every possible scam — false negatives here fall through to normal
+# classification and eventual manual review; false positives would
+# silently reject something legitimate with zero visibility, which is the
+# worse failure mode for a narrow, high-confidence list like this.
+_IMPERSONATION_REJECT_KEYWORDS = ("circle internet", "circle wrapped", "circle official")
+
+
+def _is_impersonation_attempt(name: str | None, symbol: str | None) -> bool:
+    haystack = f"{name or ''} {symbol or ''}".lower()
+    return any(kw in haystack for kw in _IMPERSONATION_REJECT_KEYWORDS)
 
 
 def _infer_category(name: str | None, symbol: str | None, default: str = "token") -> str:
@@ -530,14 +549,36 @@ def _classify_from_blockscout(info: dict) -> dict | None:
     return None
 
 
+def _finalize_classification(result: dict) -> dict:
+    """
+    Last step before any classify_one() result is returned. Forces
+    category back to None — i.e. "no signal, needs a human" — if the
+    name/symbol a source returned matches a brand-impersonation pattern
+    (see _IMPERSONATION_REJECT_KEYWORDS), REGARDLESS of what category that
+    source would otherwise have inferred. Added 2026-10-03 after real
+    tokens named "Circle Internet Group • Arc Token" and "Circle Wrapped
+    Bitcoin" made it through normal classification. The gecko_name/
+    gecko_symbol fields are left intact (so an admin reviewing
+    needs_review can still see exactly what it's impersonating), only
+    category is overridden — category=None guarantees
+    promote_ready_candidates() can never auto-promote it, no matter which
+    source found it or what it would have otherwise been categorized as.
+    """
+    if _is_impersonation_attempt(result.get("gecko_name"), result.get("gecko_symbol")):
+        return {**result, "category": None}
+    return result
+
+
 def classify_one(address: str) -> dict:
     """
     Classify a single candidate contract, trying each source in order and
     stopping at the first hit. Returns a dict with
     category/gecko_symbol/gecko_name/gecko_score/gecko_is_honeypot,
-    category=None if NO source found a signal (this row then goes to
-    needs_review for manual admin classification — see
-    classify_candidates()).
+    category=None if NO source found a signal, OR if the name/symbol
+    matched a brand-impersonation pattern regardless of source (see
+    _finalize_classification) — either way this row then goes to
+    needs_review for manual admin classification, never auto-promoted
+    (see classify_candidates()).
 
     Order: known infra (free, instant, no API call) -> Blockscout
     (explorer.arc.io — verified-name + proxy-implementation data; tried
@@ -548,6 +589,11 @@ def classify_one(address: str) -> dict:
     address = address.lower()
 
     if address in KNOWN_INFRA_CONTRACTS:
+        # Not run through _finalize_classification: these are our own
+        # hardcoded, independently-verified addresses (see
+        # KNOWN_INFRA_CONTRACTS' comment), not a name a source reported —
+        # there's nothing here for the impersonation check to meaningfully
+        # apply to.
         return {
             "category": "infra",
             "gecko_symbol": None,
@@ -560,32 +606,32 @@ def classify_one(address: str) -> dict:
     if blockscout_info:
         result = _classify_from_blockscout(blockscout_info)
         if result:
-            return result
+            return _finalize_classification(result)
 
     gecko_attrs = _gecko_token_info(address)
     if gecko_attrs:
         symbol = gecko_attrs.get("symbol")
         name = gecko_attrs.get("name")
-        return {
+        return _finalize_classification({
             "category": _infer_category(name, symbol),
             "gecko_symbol": symbol,
             "gecko_name": name,
             "gecko_score": gecko_attrs.get("gt_score"),
             "gecko_is_honeypot": str(gecko_attrs.get("is_honeypot")),
-        }
+        })
 
     dex_pair = _dexscreener_token_info(address)
     if dex_pair:
         base = dex_pair.get("baseToken") or {}
         symbol = base.get("symbol")
         name = base.get("name")
-        return {
+        return _finalize_classification({
             "category": _infer_category(name, symbol),
             "gecko_symbol": symbol,
             "gecko_name": name,
             "gecko_score": None,
             "gecko_is_honeypot": None,
-        }
+        })
 
     # No signal from any source. TODO: event-topic heuristic here (does it
     # look like a DEX pool from its Transfer/Swap event shape in
