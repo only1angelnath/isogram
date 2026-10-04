@@ -228,45 +228,43 @@ def _client():
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
+UNMAPPED_ACTIVITY_WINDOW_DAYS = int(os.environ.get("UNMAPPED_ACTIVITY_WINDOW_DAYS", "14"))
+
+
 def upsert_unmapped_contracts(db=None) -> int:
-    """Pull distinct unmapped contract_addresses from gas_events and
-    upsert call_count/first_seen/last_seen into discovered_contracts.
-    Returns the number of distinct contracts touched this run."""
+    """Pull per-contract activity for addresses with no project mapping from
+    the daily_contract_metrics rollup (via the unmapped_contract_activity()
+    SQL function, which aggregates in Postgres) and upsert
+    call_count/first_seen/last_seen into discovered_contracts.
+    Returns the number of distinct contracts touched this run.
+
+    CHANGED 2026-10-04: this used to select every unmapped gas_events row
+    with NO pagination, so PostgREST's silent 1000-row cap meant discovery
+    only ever saw ~1000 transactions per run. Per-transaction rows no longer
+    exist (see ingestion/rollup.py); call_count is now the true transaction
+    count over the last UNMAPPED_ACTIVITY_WINDOW_DAYS days."""
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
 
-    resp = (
-        db.table("gas_events")
-        .select("contract_address, ts")
-        .is_("project_id", "null")
-        .execute()
-    )
+    resp = db.rpc("unmapped_contract_activity", {"p_days": UNMAPPED_ACTIVITY_WINDOW_DAYS}).execute()
     rows = resp.data or []
 
-    agg = {}
-    for row in rows:
-        addr = row["contract_address"].lower()
-        ts = row["ts"]
-        entry = agg.setdefault(addr, {"call_count": 0, "first_seen": ts, "last_seen": ts})
-        entry["call_count"] += 1
-        if ts < entry["first_seen"]:
-            entry["first_seen"] = ts
-        if ts > entry["last_seen"]:
-            entry["last_seen"] = ts
+    batch = [
+        {
+            "contract_address": row["contract_address"].lower(),
+            "call_count": int(row["call_count"]),
+            "first_seen": row["first_seen"],
+            "last_seen": row["last_seen"],
+            "updated_at": now,
+        }
+        for row in rows
+    ]
+    # Chunked upserts: there can be thousands of candidates now that the
+    # 1000-row cap is gone (statement-timeout lesson, docs/BUGS.md).
+    for i in range(0, len(batch), 500):
+        db.table("discovered_contracts").upsert(batch[i:i + 500], on_conflict="contract_address").execute()
 
-    for addr, entry in agg.items():
-        db.table("discovered_contracts").upsert(
-            {
-                "contract_address": addr,
-                "call_count": entry["call_count"],
-                "first_seen": entry["first_seen"],
-                "last_seen": entry["last_seen"],
-                "updated_at": now,
-            },
-            on_conflict="contract_address",
-        ).execute()
-
-    return len(agg)
+    return len(batch)
 
 
 GECKOTERMINAL_TRENDING_PRO_URL = (

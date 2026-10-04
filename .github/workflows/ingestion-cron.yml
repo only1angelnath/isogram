@@ -11,6 +11,13 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}  # allow manual runs from the Actions tab
 
+# Queue instead of overlapping: two simultaneous runs would race on the
+# checkpoint. (apply_ingest_batch() rejects a stale batch rather than
+# double-counting, but queueing avoids the wasted work and red runs.)
+concurrency:
+  group: ingestion-cron
+  cancel-in-progress: false
+
 jobs:
   ingest:
     runs-on: ubuntu-latest
@@ -58,4 +65,13 @@ jobs:
           BLOCKDAEMON_ARC_RPC_URL: ${{ secrets.BLOCKDAEMON_ARC_RPC_URL }}
           BLOCKDAEMON_API_KEY: ${{ secrets.BLOCKDAEMON_API_KEY }}
           QUICKNODE_ARC_RPC_URL: ${{ secrets.QUICKNODE_ARC_RPC_URL }}
+          # Rollup path (2026-10-04, ingestion/rollup.py). 2 RPC calls per
+          # block now (was ~13), so concurrency counts blocks in flight.
+          # Raise RPC_CONCURRENCY only after watching logs for 429s.
+          RPC_CONCURRENCY: "4"
+          BATCH_BLOCKS: "500"
+          MAX_BLOCKS_PER_RUN: "20000"
+          # Stop starting new sub-batches after 25 min (job timeout is 45);
+          # the checkpoint is saved per sub-batch so nothing is lost.
+          RUN_TIME_BUDGET_SECONDS: "1500"
         run: python worker.py

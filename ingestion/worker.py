@@ -175,7 +175,10 @@ DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 # run) while making real progress against a multi-hour gap. Revisit once
 # an external trigger (see AGENTS.md/HANDOFF.md) makes GitHub's scheduler
 # unnecessary and the backlog is actually caught up.
-MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "3000"))
+# 2026-10-04: raised 3000 -> 20000. Work per run is now bounded by
+# rollup.RUN_TIME_BUDGET_SECONDS (checkpoint is saved every BATCH_BLOCKS blocks),
+# so this cap no longer needs to protect against losing a whole run.
+MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "20000"))
 
 # usd_value is only populated for tokens we can currently price at 1:1 USD.
 # EURC is EUR-pegged, not USD-pegged — pricing it at 1:1 USD here would be
@@ -576,6 +579,17 @@ def process_blocks_concurrent(w3, block_numbers: list, contract_project_map: dic
 
 
 def run():
+    """
+    Rollup-based run (2026-10-04, see rollup.py's module docstring): 2 RPC
+    calls per block (header + eth_getBlockReceipts), aggregated in memory and
+    applied atomically per sub-batch through apply_ingest_batch(), which also
+    advances sync_state in the same transaction. No per-transaction rows are
+    written anymore (gas_events/token_flows are legacy, no longer written).
+    The sequential/concurrent per-receipt functions above are kept only for
+    the existing test-suite and as a fallback reference.
+    """
+    from rollup import run_maintenance, run_rollup  # lazy: rollup imports this module
+
     client = get_client()
     pool = get_web3_pool()
     sticky = _StickyPoolIndex()
@@ -587,25 +601,16 @@ def run():
         print(f"Already synced through block {last_synced}, chain tip is {latest_block}. Nothing to do.")
         return
 
-    end_block = min(latest_block, last_synced + MAX_BLOCKS_PER_RUN)
     contract_project_map = load_contract_project_map(client)
+    print(f"Syncing blocks {last_synced + 1}.. (chain tip: {latest_block}, lag {latest_block - last_synced})")
 
-    print(f"Syncing blocks {last_synced + 1}..{end_block} (chain tip: {latest_block})")
-
-    try:
-        block_numbers = list(range(last_synced + 1, end_block + 1))
-        all_gas_events, all_token_flows = process_blocks_concurrent(pool, block_numbers, contract_project_map, sticky)
-    except Exception as exc:
-        # Deliberately do NOT advance the checkpoint on failure — the next
-        # run resumes from last_synced, per docs/AUDIT.md's idempotency check.
-        print(f"Ingestion failed partway through: {exc}", file=sys.stderr)
-        raise
-
-    upsert_gas_events(client, all_gas_events)
-    upsert_token_flows(client, all_token_flows)
-    update_last_synced_block(client, end_block)
-
-    print(f"Done. Wrote {len(all_gas_events)} gas events, {len(all_token_flows)} token flows. Checkpoint now at {end_block}.")
+    summary = run_rollup(
+        client, pool, sticky, contract_project_map,
+        last_synced=last_synced, latest_block=latest_block, max_blocks=MAX_BLOCKS_PER_RUN,
+    )
+    run_maintenance(client)
+    print(f"Done. {summary['blocks']} blocks in {summary['batches']} atomic batches, "
+          f"{summary['seconds']:.0f}s. Checkpoint now at {summary['checkpoint']}, lag {summary['lag']}.")
 
 
 if __name__ == "__main__":
