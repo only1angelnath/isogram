@@ -258,7 +258,9 @@ def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_
 def run_maintenance(client) -> None:
     """Bound the two address tables and the contract long tail. Best-effort."""
     for fn, params in (
-        ("prune_rollup_addresses", {"p_keep_days": 1}),
+        # default window (8 days): unique-user counts need 7 days of distinct
+        # addresses; daily counts are persisted before anything is pruned.
+        ("prune_rollup_addresses", {}),
         ("prune_rollup_long_tail", {}),
     ):
         try:

@@ -79,9 +79,15 @@ def _fetch_all_pages_keyset(build_query, cursor_column: str):
 
 
 def fetch_projects(client: Client) -> list[dict]:
-    """All tracked projects: id, contracts, created_at."""
-    result = client.table("projects").select("id, contracts, created_at").execute()
-    return result.data or []
+    """
+    All tracked projects: id, contracts, created_at. Keyset-paginated on id
+    (primary key): discovery now promotes dozens of projects per run, and an
+    unpaginated select silently stops at PostgREST's 1000-row cap.
+    """
+    return _fetch_all_pages_keyset(
+        lambda: client.table("projects").select("id, contracts, created_at"),
+        cursor_column="id",
+    )
 
 
 def fetch_gas_events_since(client: Client, since_iso: str) -> list[dict]:
@@ -164,3 +170,38 @@ def upsert_network_stats(client: Client, row: dict) -> None:
     supabase/migrations/20260924080000_network_stats.sql.
     """
     client.table("network_stats").upsert({**row, "id": 1}).execute()
+
+
+# --- Rollup readers (2026-10-04) ---------------------------------------------
+# gas_events/token_flows are legacy: the ingestion worker no longer writes
+# them (see ingestion/rollup.py). Scoring reads the daily rollups through
+# SQL functions that aggregate inside Postgres - no paging, no row cap on
+# the volume of raw data (migration 20261005010000_scoring_rollup_functions).
+
+def fetch_project_window_metrics(client: Client, days: int) -> list[dict]:
+    """
+    Per-project activity for the trailing `days` UTC days (today included).
+    Returns ONLY projects with activity - callers treat a missing project as
+    zero. Fields: project_id, tx_count, failed_tx_count, usdc_gas (TEXT, 6-dec
+    USDC view), unique_users. PostgREST caps a response at 1000 rows; with
+    activity-only rows that is far above the real number of active projects,
+    but if it is ever reached this raises instead of silently truncating.
+    """
+    result = client.rpc("project_window_metrics", {"p_days": days}).execute()
+    rows = result.data or []
+    if len(rows) >= PAGE_SIZE:
+        raise RuntimeError(
+            f"project_window_metrics returned {len(rows)} rows = PostgREST's cap; "
+            "results may be truncated - paginate this function before trusting scores."
+        )
+    return rows
+
+
+def fetch_network_window_stats(client: Client, days: int) -> dict:
+    """Chain-wide totals for the trailing window: total_tx, total_volume_usd (TEXT),
+    unique_users, days_with_data."""
+    result = client.rpc("network_window_stats", {"p_days": days}).execute()
+    rows = result.data or []
+    if not rows:
+        raise RuntimeError("network_window_stats returned no row")
+    return rows[0]

@@ -3,20 +3,16 @@ compute_scores.py — main scoring job entrypoint.
 
 Run periodically (GitHub Actions cron, less frequent than ingestion — see
 docs/ARCHITECTURE.md §2.4). Each run:
-  1. Reads all tracked projects.
-  2. Reads gas_events and token_flows for the trailing 7 days (usdc_gas_7d,
-     unique_users_7d).
-  3. Queries each project's CURRENT on-chain token balances for TVL (see
-     tvl.py — rewritten 2026-09-27 to stop depending on all-time
-     token_flows history, which is no longer safe to assume is complete
-     now that retention pruning exists).
-  4. Computes each project's raw metrics, normalizes them relative to each
-     other, and combines them into one score (scoring.py).
-  5. Writes one project_scores row per project for this run.
-  6. Prunes gas_events/token_flows rows older than RETENTION_DAYS (default
-     14) — safe now that TVL no longer depends on all-time flow history
-     (see tvl.py). This is what keeps Supabase's free-tier storage from
-     overrunning again (docs/BUGS.md — happened once already).
+  1. Reads network-wide window totals and per-project window metrics from the
+     DAILY ROLLUPS (daily_*_metrics / daily_contract_users) through Postgres
+     functions — see docs/decisions/ADR-003-rollup-metrics-source.md. Before
+     2026-10-04 this paged ~1M raw gas_events/token_flows rows through
+     PostgREST (679s, crashed twice on statement timeouts); per-transaction
+     rows no longer exist.
+  2. Queries each project's CURRENT on-chain token balances for TVL (tvl.py).
+  3. Normalizes the metrics relative to each other and combines them into one
+     score (scoring.py — formula UNCHANGED, see ADR-002).
+  4. Writes network_stats and one project_scores row per project.
 
 Usage:
     python compute_scores.py
@@ -33,11 +29,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from db import (
-    fetch_gas_events_since,
+    fetch_network_window_stats,
+    fetch_project_window_metrics,
     fetch_projects,
-    fetch_token_flows_since,
     get_client,
-    prune_rows_before,
     upsert_network_stats,
     upsert_project_scores,
 )
@@ -46,17 +41,9 @@ from tvl import fetch_project_tvl_onchain, get_web3_pool
 
 SCORE_WINDOW_DAYS = 7
 
-# Retention pruning (2026-09-27, see docs/BUGS.md): gas_events/token_flows
-# were the direct cause of a real Supabase free-tier storage overrun
-# ("Database Size 111%") after a handful of backfill runs. TVL no longer
-# depends on this history (tvl.py now queries live on-chain balances), so
-# pruning rows older than the scoring window is finally safe — nothing else
-# in this codebase reads gas_events/token_flows beyond SCORE_WINDOW_DAYS.
-# A small buffer beyond SCORE_WINDOW_DAYS (rather than pruning at exactly
-# 7 days) avoids ever deleting a row a run still in progress might read.
-# Override with RETENTION_DAYS if this needs tuning against real quota
-# usage.
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "14"))
+# Raw-row retention pruning was removed 2026-10-04: there are no raw rows any more
+# (ingestion writes rollups only). Rollup housekeeping lives in ingestion/rollup.py.
+
 
 
 def _parse_ts(value) -> datetime:
@@ -66,61 +53,56 @@ def _parse_ts(value) -> datetime:
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
+def index_window_metrics(rows: list[dict]) -> dict[str, dict]:
+    """
+    Pure function: project_window_metrics() rows -> {project_id: metrics} with
+    exact Decimals (usdc_gas arrives as TEXT on purpose - never a float).
+    """
+    out: dict[str, dict] = {}
+    for row in rows:
+        out[row["project_id"]] = {
+            "usdc_gas": Decimal(str(row["usdc_gas"])),
+            "unique_users": Decimal(int(row["unique_users"])),
+            "tx_count": int(row["tx_count"]),
+            "failed_tx_count": int(row["failed_tx_count"]),
+        }
+    return out
+
+
 def build_project_metrics(
     projects: list[dict],
-    gas_events_7d: list[dict],
-    token_flows_7d: list[dict],
+    window_metrics: dict[str, dict],
     rpc_pool: list,
     now: datetime,
+    tvl_fetcher=None,
 ) -> dict[str, dict]:
     """
-    Pure-ish function: turn raw rows + live on-chain balance queries into a
-    {project_id: {metric: value}} dict. Only the TVL step makes network
-    calls (via rpc_pool) — gas/user metrics are still pure computation over
-    already-fetched rows, kept unit-testable the same way as before.
-    """
-    gas_by_project: dict[str, Decimal] = {}
-    for row in gas_events_7d:
-        project_id = row.get("project_id")
-        if not project_id:
-            continue
-        gas_by_project[project_id] = gas_by_project.get(project_id, Decimal("0")) + Decimal(
-            str(row["usdc_gas_paid"])
-        )
+    Turn per-project window metrics (from the rollups) + live on-chain TVL
+    into {project_id: {metric: value}}. A project with no activity in the
+    window is all-zero, never missing. Only the TVL step makes network calls
+    (via tvl_fetcher, injectable for tests).
 
+    unique_users_7d semantics CHANGED 2026-10-04 (ADR-003): distinct
+    transaction SENDERS that called the project's contracts, not distinct
+    token-transfer senders. The score formula itself is unchanged.
+    """
+    tvl_fetcher = tvl_fetcher or fetch_project_tvl_onchain  # resolved at call time (patchable)
     metrics: dict[str, dict] = {}
     for project in projects:
         project_id = project["id"]
         contracts = [c.lower() for c in (project.get("contracts") or [])]
-        contracts_set = set(contracts)
-
-        usdc_gas_7d = gas_by_project.get(project_id, Decimal("0"))
-
-        # unique_users_7d: distinct senders in token_flows targeting this
-        # project's contracts in the trailing window. See
-        # docs/decisions/ADR-002-scoring-formula.md for why this is the
-        # chosen proxy (gas_events has no sender/from column).
-        senders = {
-            (flow.get("from_address") or "").lower()
-            for flow in token_flows_7d
-            if (flow.get("to_address") or "").lower() in contracts_set
-            and flow.get("from_address")
-        }
-        unique_users_7d = Decimal(len(senders))
-
-        # TVL: live on-chain balance query, not derived from stored history
-        # (see tvl.py's module docstring for why that distinction matters
-        # now that token_flows is retention-pruned).
-        tvl_usd = fetch_project_tvl_onchain(rpc_pool, contracts)
+        wm = window_metrics.get(project_id) or {}
 
         created_at = _parse_ts(project["created_at"]) if project.get("created_at") else now
-        age_bonus = contract_age_bonus(created_at, now)
 
         metrics[project_id] = {
-            "usdc_gas_7d": usdc_gas_7d,
-            "unique_users_7d": unique_users_7d,
-            "tvl_usd": tvl_usd,
-            "age_bonus": age_bonus,
+            "usdc_gas_7d": wm.get("usdc_gas", Decimal("0")),
+            "unique_users_7d": wm.get("unique_users", Decimal("0")),
+            "tvl_usd": tvl_fetcher(rpc_pool, contracts),
+            "age_bonus": contract_age_bonus(created_at, now),
+            # Reported alongside the score, NOT part of the formula:
+            "tx_count_7d": wm.get("tx_count", 0),
+            "failed_tx_7d": wm.get("failed_tx_count", 0),
         }
     return metrics
 
@@ -152,44 +134,24 @@ def compute_all_scores(metrics: dict[str, dict], computed_at: datetime) -> list[
             "tvl_usd": str(m["tvl_usd"]),
             "usdc_gas_7d": str(m["usdc_gas_7d"]),
             "unique_users_7d": int(m["unique_users_7d"]),
+            "tx_count_7d": int(m.get("tx_count_7d", 0)),
+            "failed_tx_7d": int(m.get("failed_tx_7d", 0)),
             "computed_at": computed_at.isoformat(),
         })
     return rows
 
 
-def build_network_stats(gas_events_7d: list[dict], token_flows_7d: list[dict], computed_at: datetime) -> dict:
+def build_network_stats(window: dict, computed_at: datetime) -> dict:
     """
-    Pure function: network-wide totals for the dashboard's stat strip
-    (docs/BRANDING.md §5). Deliberately NOT per-project — this is chain-wide
-    activity, computed independent of which contracts are tracked as
-    "projects", since gas gets paid and tokens move on Arc regardless of
-    whether we've identified the project behind a given contract yet.
-
-    total_volume_7d only sums usd_value for flows where it's set (priced
-    tokens only — see ingestion/worker.py's USD_PEGGED_1_TO_1) — an unpriced
-    token's raw `amount` is never added into a USD total, that would silently
-    mix units.
-
-    Both gas_events_7d and token_flows_7d are now fully paginated (see
-    db.py's PAGE_SIZE / _fetch_all_pages) — before 2026-09-27 these were
-    silently capped at 1000 rows by PostgREST's default, which is why
-    total_tx_7d was stuck at exactly 1000 regardless of real volume.
+    Pure function: network_window_stats() row -> network_stats row for the
+    dashboard stat strip. Chain-wide, independent of which contracts are
+    tracked as projects. total_volume_7d is ERC-20 transfer volume of the
+    1:1-USD tokens only (USDC, USYC); EURC and native gas are never added.
     """
-    total_volume_7d = sum(
-        (Decimal(str(flow["usd_value"])) for flow in token_flows_7d if flow.get("usd_value") is not None),
-        Decimal("0"),
-    )
-    total_tx_7d = len(gas_events_7d)
-    unique_users_7d = len({
-        (flow.get("from_address") or "").lower()
-        for flow in token_flows_7d
-        if flow.get("from_address")
-    })
-
     return {
-        "total_volume_7d": str(total_volume_7d),
-        "total_tx_7d": total_tx_7d,
-        "total_unique_users_7d": unique_users_7d,
+        "total_volume_7d": str(Decimal(str(window["total_volume_usd"]))),
+        "total_tx_7d": int(window["total_tx"]),
+        "total_unique_users_7d": int(window["unique_users"]),
         "computed_at": computed_at.isoformat(),
     }
 
@@ -197,41 +159,27 @@ def build_network_stats(gas_events_7d: list[dict], token_flows_7d: list[dict], c
 def run():
     client = get_client()
     now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=SCORE_WINDOW_DAYS)).isoformat()
 
-    # Fetched before the "any projects?" check below — chain-wide gas/flow
-    # activity exists independent of which contracts we've identified as
-    # tracked projects, so network_stats should reflect it either way.
-    # Both are now fully paginated — see db.py's PAGE_SIZE.
-    gas_events_7d = fetch_gas_events_since(client, since)
-    token_flows_7d = fetch_token_flows_since(client, since)
-
-    network_stats = build_network_stats(gas_events_7d, token_flows_7d, now)
+    window = fetch_network_window_stats(client, SCORE_WINDOW_DAYS)
+    network_stats = build_network_stats(window, now)
     upsert_network_stats(client, network_stats)
-    print(f"Updated network_stats: {network_stats}")
+    print(f"Updated network_stats: {network_stats} "
+          f"(rollup days in window: {window.get('days_with_data')}/{SCORE_WINDOW_DAYS})")
 
     projects = fetch_projects(client)
     if not projects:
         print("No tracked projects yet. Nothing to score.")
         return
 
-    # TVL is now a live on-chain query (tvl.py), not derived from stored
-    # flow history — no more fetch_all_token_flows() call needed at all.
+    window_metrics = index_window_metrics(fetch_project_window_metrics(client, SCORE_WINDOW_DAYS))
     rpc_pool = get_web3_pool()
 
-    metrics = build_project_metrics(projects, gas_events_7d, token_flows_7d, rpc_pool, now)
+    metrics = build_project_metrics(projects, window_metrics, rpc_pool, now)
     rows = compute_all_scores(metrics, now)
 
     upsert_project_scores(client, rows)
-    print(f"Wrote {len(rows)} project_scores rows for computed_at={now.isoformat()}.")
-
-    # Prune LAST, after everything this run needed has already been read
-    # and written — never delete data a run in progress might still use.
-    retention_cutoff = (now - timedelta(days=RETENTION_DAYS)).isoformat()
-    deleted_gas = prune_rows_before(client, "gas_events", "tx_hash", retention_cutoff)
-    deleted_flows = prune_rows_before(client, "token_flows", "id", retention_cutoff)
-    print(f"Pruned rows older than {RETENTION_DAYS}d (before {retention_cutoff}): "
-          f"{deleted_gas} gas_events, {deleted_flows} token_flows.")
+    print(f"Wrote {len(rows)} project_scores rows for computed_at={now.isoformat()} "
+          f"({len(window_metrics)} projects had activity in the window).")
 
 
 if __name__ == "__main__":

@@ -71,14 +71,31 @@ def build_contract_project_map(project_rows: list[dict]) -> dict[str, str]:
     return lookup
 
 
+PROJECTS_PAGE_SIZE = 1000  # PostgREST's default response cap
+
+
 def load_contract_project_map(client: Client) -> dict[str, str]:
     """
     Fetch all known projects and build the contract -> project_id lookup.
     Call this once per worker run (or periodically) rather than per-block —
     the projects table changes rarely compared to block volume.
     """
-    result = client.table("projects").select("id, contracts").execute()
-    return build_contract_project_map(result.data or [])
+    # Keyset-paginated on id (primary key). Discovery promotes dozens of
+    # projects per run; an unpaginated select silently stops at PostgREST's
+    # 1000-row cap, after which contracts of later projects would be quietly
+    # unmapped (the same silent-truncation class as docs/BUGS.md's gas_events bug).
+    rows: list[dict] = []
+    last_id = None
+    while True:
+        query = client.table("projects").select("id, contracts")
+        if last_id is not None:
+            query = query.gt("id", last_id)
+        page = query.order("id").limit(PROJECTS_PAGE_SIZE).execute().data or []
+        rows.extend(page)
+        if len(page) < PROJECTS_PAGE_SIZE:
+            break
+        last_id = page[-1]["id"]
+    return build_contract_project_map(rows)
 
 
 def resolve_project_id(contract_address: str, contract_project_map: dict[str, str]) -> Optional[str]:
