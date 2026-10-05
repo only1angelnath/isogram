@@ -246,7 +246,12 @@ def upsert_unmapped_contracts(db=None) -> int:
     db = db or _client()
     now = datetime.now(timezone.utc).isoformat()
 
-    resp = db.rpc("unmapped_contract_activity", {"p_days": UNMAPPED_ACTIVITY_WINDOW_DAYS}).execute()
+    # Top-N by activity: PostgREST silently caps any response at 1000 rows, so ask
+    # for the 1000 busiest unmapped contracts explicitly rather than an arbitrary 1000.
+    resp = db.rpc(
+        "unmapped_contract_activity",
+        {"p_days": UNMAPPED_ACTIVITY_WINDOW_DAYS, "p_limit": 1000},
+    ).execute()
     rows = resp.data or []
 
     batch = [
