@@ -317,3 +317,15 @@ def test_process_batch_failure_aborts_without_apply(monkeypatch):
     monkeypatch.setattr(rollup, "fetch_block", flaky)
     with pytest.raises(RuntimeError):
         rollup.process_batch([object()], _StickyPoolIndex(), [1, 2, 3, 4], set(), concurrency=2)
+
+
+def test_apply_batch_sends_end_block_timestamp_for_freshness(monkeypatch):
+    monkeypatch.setattr(rollup, "fetch_block", lambda pool, sticky, n: (n, TS + n, [receipt()]))
+    monkeypatch.setattr(rollup, "BATCH_BLOCKS", 100)
+    client = _FakeClient()
+    run_rollup(client, [object()], _StickyPoolIndex(), {}, last_synced=0, latest_block=100, max_blocks=100)
+    params = client.calls[0][1]
+    # newest block (100) has the newest timestamp: TS + 100
+    assert params["p_end_block_ts"].startswith("2026-09-21") or params["p_end_block_ts"].startswith("2026-09-22")
+    from datetime import datetime, timezone
+    assert datetime.fromisoformat(params["p_end_block_ts"]) == datetime.fromtimestamp(TS + 100, tz=timezone.utc)

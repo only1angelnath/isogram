@@ -200,3 +200,10 @@ def insert_submission(client: Client, submission: dict) -> dict:
     """
     result = client.table("project_submissions").insert(submission).execute()
     return result.data[0] if result.data else {}
+
+
+def fetch_pipeline_status(client: Client) -> dict | None:
+    """How far ingestion has processed: last_block_number, data_through (timestamp of
+    the last applied block), checkpoint_updated_at. None if unavailable."""
+    rows = client.rpc("pipeline_status", {}).execute().data or []
+    return rows[0] if rows else None

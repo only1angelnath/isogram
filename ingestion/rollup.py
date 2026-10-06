@@ -132,6 +132,7 @@ class BatchAccumulator:
         self.addresses = {}       # day -> set of 40-hex sender addresses
         self.contract_users = {}  # day -> {tracked contract -> set of senders}
         self.missing_from = 0
+        self.max_block_ts = 0     # newest block timestamp seen (freshness)
 
     def _net(self, day: str) -> dict:
         return self.network.setdefault(day, {
@@ -140,6 +141,7 @@ class BatchAccumulator:
         })
 
     def add_block(self, block_timestamp: int, receipts: list) -> None:
+        self.max_block_ts = max(self.max_block_ts, block_timestamp)
         day = datetime.fromtimestamp(block_timestamp, tz=timezone.utc).date().isoformat()
         net = self._net(day)
         net["blocks"] += 1
@@ -253,6 +255,9 @@ def process_batch(pool: list, sticky: "_StickyPoolIndex", block_numbers: list, t
 def apply_batch(client, start_block: int, end_block: int, acc: BatchAccumulator) -> None:
     """Atomically apply the batch AND advance sync_state (see the SQL function)."""
     params = {"p_start_block": start_block, "p_end_block": end_block, **acc.to_payload()}
+    if acc.max_block_ts:
+        # Recorded in sync_state atomically with the checkpoint -> pipeline_status().data_through
+        params["p_end_block_ts"] = datetime.fromtimestamp(acc.max_block_ts, tz=timezone.utc).isoformat()
     client.rpc("apply_ingest_batch", params).execute()
 
 

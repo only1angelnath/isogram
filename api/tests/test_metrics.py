@@ -87,6 +87,7 @@ def test_project_summary_tier_and_failed_rate():
 def test_network_daily_route_and_day_validation(client, monkeypatch):
     import routes.metrics as m
     seen = {}
+    monkeypatch.setattr(m, "fetch_pipeline_status", lambda c: {"data_through": "2026-10-04T23:00:00+00:00"})
     monkeypatch.setattr(m, "fetch_network_daily",
                         lambda c, days: seen.setdefault("days", days) and [
                             {"day": "2026-10-04", "tx_count": 10, "failed_tx_count": 1, "usdc_gas_paid": "1",
@@ -187,3 +188,57 @@ def test_fetch_all_latest_scores_reads_the_latest_view_and_pages_past_1000():
 def test_fetch_projects_pages_past_1000():
     rows = [{"id": f"p{i:05d}", "name": "n"} for i in range(1500)]
     assert len(db.fetch_projects(_Client({"projects": (rows, "id")}))) == 1500
+
+
+# ------------------------------------------------------------------ freshness
+
+def test_partial_follows_data_through_not_the_calendar():
+    rows = [{"day": d, "tx_count": 1, "failed_tx_count": 0, "usdc_gas_paid": "1", "source": "live"}
+            for d in ("2026-10-04", "2026-10-05", "2026-10-06")]
+    # Today is 10-06 but ingestion has only reached 10-05 10:45: 10-05 is NOT complete.
+    out = aggregate.build_network_daily(rows, today="2026-10-06", data_through="2026-10-05T10:45:00+00:00")
+    assert [r["partial"] for r in out] == [False, True, True]
+    # Fully caught up: only today is partial.
+    out = aggregate.build_network_daily(rows, today="2026-10-06", data_through="2026-10-06T09:59:00+00:00")
+    assert [r["partial"] for r in out] == [False, False, True]
+    # Unknown freshness falls back to the calendar.
+    out = aggregate.build_network_daily(rows, today="2026-10-06", data_through=None)
+    assert [r["partial"] for r in out] == [False, False, True]
+
+
+def test_backfill_days_are_never_flagged_partial():
+    rows = [{"day": "2026-09-28", "tx_count": 5, "usdc_gas_paid": "1", "source": "raw_backfill"}]
+    assert aggregate.build_network_daily(rows, today="2026-10-06",
+                                         data_through="2026-09-01T00:00:00+00:00")[0]["partial"] is False
+
+
+def test_pipeline_status_live_behind_unknown():
+    from datetime import datetime, timezone
+    now = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+    live = aggregate.build_pipeline_status({"last_block_number": 7, "data_through": "2026-10-06T11:55:00+00:00"}, now)
+    assert live["status"] == "live" and live["lag_seconds"] == 300 and live["last_block_number"] == 7
+    behind = aggregate.build_pipeline_status({"data_through": "2026-10-05T10:45:00+00:00"}, now)
+    assert behind["status"] == "behind" and behind["lag_seconds"] == 25 * 3600 + 15 * 60
+    assert aggregate.build_pipeline_status({"data_through": None}, now)["status"] == "unknown"
+    assert aggregate.build_pipeline_status(None, now)["status"] == "unknown"
+
+
+def test_status_route(client, monkeypatch):
+    import routes.metrics as m
+    monkeypatch.setattr(m, "fetch_pipeline_status", lambda c: {"last_block_number": 24400000,
+                        "data_through": "2026-10-05T10:45:00+00:00", "checkpoint_updated_at": "2026-10-06T10:40:00+00:00"})
+    body = client.get("/metrics/status").json()
+    assert body["status"] == "behind" and body["last_block_number"] == 24400000
+    assert body["data_through"].startswith("2026-10-05T10:45")
+
+
+def test_network_daily_survives_missing_freshness(client, monkeypatch):
+    import routes.metrics as m
+
+    def boom(c):
+        raise RuntimeError("pipeline_status function missing")
+
+    monkeypatch.setattr(m, "fetch_pipeline_status", boom)
+    monkeypatch.setattr(m, "fetch_network_daily", lambda c, days: [
+        {"day": "2026-10-04", "tx_count": 10, "failed_tx_count": 1, "usdc_gas_paid": "1", "source": "live"}])
+    assert client.get("/metrics/network/daily").status_code == 200

@@ -1,6 +1,7 @@
 """
 routes/metrics.py - the time-series / breakdown metrics layer.
 
+  GET /metrics/status                       how fresh the data is (read this first)
   GET /metrics/network/daily?days=30        chain-wide daily series
   GET /metrics/tokens/daily?days=30&token=  per-token daily transfers + volume
   GET /metrics/contracts/top?days=7&limit=  top contracts by USDC gas
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from aggregate import (
     TOKEN_SYMBOLS,
     build_network_daily,
+    build_pipeline_status,
     build_project_daily,
     build_score_history,
     build_token_daily,
@@ -24,6 +26,7 @@ from aggregate import (
 from db import (
     TRACKED_TOKENS,
     fetch_network_daily,
+    fetch_pipeline_status,
     fetch_project,
     fetch_project_daily,
     fetch_score_history,
@@ -31,7 +34,7 @@ from db import (
     fetch_top_contracts,
     get_client,
 )
-from models import NetworkDay, ProjectDay, ScorePoint, TokenDay, TopContract
+from models import NetworkDay, PipelineStatus, ProjectDay, ScorePoint, TokenDay, TopContract
 
 router = APIRouter(tags=["metrics"])
 
@@ -48,11 +51,23 @@ def _resolve_token(token: str | None) -> str | None:
     raise HTTPException(status_code=400, detail=f"Untracked token '{token}'. Tracked: {sorted(TRACKED_TOKENS)}")
 
 
+@router.get("/metrics/status", response_model=PipelineStatus)
+def pipeline_status(client=Depends(get_client)):
+    """Freshness of the data: the timestamp of the last block ingestion has applied and
+    how far behind now that is. `status` is "live" within 10 minutes, otherwise "behind"
+    (catching up or stalled). Days after data_through are incomplete in every series."""
+    return build_pipeline_status(fetch_pipeline_status(client))
+
+
 @router.get("/metrics/network/daily", response_model=list[NetworkDay])
 def network_daily(days: int = Query(30, ge=1, le=90), client=Depends(get_client)):
     """Chain-wide daily totals: transactions, failure rate, USDC gas (6-decimal view),
     contract deployments, blocks, token transfers, distinct active senders."""
-    return build_network_daily(fetch_network_daily(client, days))
+    try:
+        data_through = (fetch_pipeline_status(client) or {}).get("data_through")
+    except Exception:  # freshness is advisory; never fail the series over it
+        data_through = None
+    return build_network_daily(fetch_network_daily(client, days), data_through=data_through)
 
 
 @router.get("/metrics/tokens/daily", response_model=list[TokenDay])

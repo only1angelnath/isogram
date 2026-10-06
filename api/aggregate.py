@@ -14,6 +14,9 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
+# A pipeline whose last applied block is older than this is reported as "behind".
+LIVE_LAG_SECONDS = 600
+
 # Token symbols for the 6-decimal tokens the rollups track.
 TOKEN_SYMBOLS = {
     "0x3600000000000000000000000000000000000000": "USDC",
@@ -175,17 +178,54 @@ def render_badge_svg(project_name: str, score: Optional[float]) -> str:
 
 # --- Rollup-backed series (2026-10-04) ----------------------------------------
 
-def build_network_daily(rows: list[dict], today: Optional[str] = None) -> list[dict]:
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def build_pipeline_status(row: Optional[dict], now: Optional[datetime] = None) -> dict:
+    """
+    Freshness of the data, measured: data_through is the timestamp of the last
+    block ingestion has applied. status: "live" when it is within LIVE_LAG_SECONDS
+    of now, "behind" when ingestion is catching up or stalled, "unknown" before the
+    first timestamped batch. Clients should read this before trusting "latest" values.
+    """
+    now = now or datetime.now(timezone.utc)
+    through = _parse_iso(row.get("data_through")) if row else None
+    lag = max(0, int((now - through).total_seconds())) if through else None
+    if through is None:
+        status = "unknown"
+    else:
+        status = "live" if lag <= LIVE_LAG_SECONDS else "behind"
+    return {
+        "status": status,
+        "last_block_number": row.get("last_block_number") if row else None,
+        "data_through": through.isoformat() if through else None,
+        "lag_seconds": lag,
+        "checkpoint_updated_at": row.get("checkpoint_updated_at") if row else None,
+    }
+
+
+def build_network_daily(rows: list[dict], today: Optional[str] = None,
+                        data_through: Optional[str] = None) -> list[dict]:
     """
     Shape daily_network_metrics rows for the API with derived rates.
 
-    `partial` is True for the current UTC day (still accruing). `source` is
-    passed through: "raw_backfill" days predate rollup ingestion, so their
-    failed_tx_count / contract_creations / blocks are unknown and reported as
-    None here (never as a misleading 0) - see docs/decisions/ADR-003.
+    `partial` is True for any day that is not fully covered: the day containing
+    `data_through` (the last block ingestion has applied) and every later day. It
+    falls back to "today (UTC) or later" only when freshness is unknown. This
+    matters while ingestion is catching up: a day can be in the past yet still
+    incomplete. `source` is passed through: "raw_backfill" days predate rollup
+    ingestion, so their failed_tx_count / contract_creations / blocks are unknown
+    and reported as None (never a misleading 0) - see docs/decisions/ADR-003.
     Derived: failed_rate (failed/tx), avg_gas_per_tx_usdc (gas/tx, 6-decimal view).
     """
-    today = today or datetime.now(timezone.utc).date().isoformat()
+    through = _parse_iso(data_through)
+    boundary = through.date().isoformat() if through else (today or datetime.now(timezone.utc).date().isoformat())
     out = []
     for r in rows:
         backfill = r.get("source") == "raw_backfill"
@@ -202,7 +242,7 @@ def build_network_daily(rows: list[dict], today: Optional[str] = None) -> list[d
             "token_transfer_count": r.get("token_transfer_count"),
             "active_addresses": r.get("active_addresses"),
             "source": r.get("source"),
-            "partial": r["day"] >= today,
+            "partial": (not backfill) and r["day"] >= boundary,
         })
     return out
 

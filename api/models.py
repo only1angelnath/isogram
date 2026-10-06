@@ -144,3 +144,11 @@ class ScorePoint(BaseModel):
     tvl_usd: Optional[float] = None
     usdc_gas_7d: Optional[float] = None
     unique_users_7d: Optional[int] = None
+
+
+class PipelineStatus(BaseModel):
+    status: str  # "live" | "behind" | "unknown"
+    last_block_number: Optional[int] = None
+    data_through: Optional[str] = None  # timestamp of the last block applied
+    lag_seconds: Optional[int] = None
+    checkpoint_updated_at: Optional[str] = None
