@@ -10,8 +10,16 @@ docs/SCHEMA.md) — everything here works from "the latest row per project,"
 never an average or a sum across runs.
 """
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
+
+# Token symbols for the 6-decimal tokens the rollups track.
+TOKEN_SYMBOLS = {
+    "0x3600000000000000000000000000000000000000": "USDC",
+    "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1": "EURC",
+    "0x8a5d989bbb96929f689b0200f435f53da42bf490": "USYC",
+}
 
 
 def latest_score_by_project(score_rows: list[dict]) -> dict[str, dict]:
@@ -40,6 +48,17 @@ def _to_float(value) -> Optional[float]:
         return None
 
 
+def _rate(numerator, denominator) -> Optional[float]:
+    """numerator/denominator as a float; None (not 0) when there is nothing to divide by."""
+    try:
+        n, d = Decimal(str(numerator)), Decimal(str(denominator))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if d <= 0:
+        return None
+    return float(n / d)
+
+
 def build_project_summary(project: dict, score_row: Optional[dict]) -> dict:
     """
     Merge a `projects` row with its latest `project_scores` row (if any) into
@@ -47,15 +66,25 @@ def build_project_summary(project: dict, score_row: Optional[dict]) -> dict:
     scoring job hasn't run since it was added) gets explicit nulls, never a
     fabricated zero that would look like a real "no activity" measurement
     (see docs/BUGS.md #3).
+
+    `tier`: "curated" for hand-seeded projects (projects.seeded), "discovered"
+    for everything auto-promoted by discovery - so clients can keep the
+    ecosystem list separate from the long tail of launchpad tokens.
     """
+    tx = score_row.get("tx_count_7d") if score_row else None
+    failed = score_row.get("failed_tx_7d") if score_row else None
     return {
         "id": project["id"],
         "name": project["name"],
         "category": project.get("category"),
+        "tier": "curated" if project.get("seeded") else "discovered",
         "score": _to_float(score_row["score"]) if score_row else None,
         "tvl_usd": _to_float(score_row.get("tvl_usd")) if score_row else None,
         "usdc_gas_7d": _to_float(score_row.get("usdc_gas_7d")) if score_row else None,
         "unique_users_7d": score_row.get("unique_users_7d") if score_row else None,
+        "tx_count_7d": tx,
+        "failed_tx_7d": failed,
+        "failed_rate_7d": _rate(failed, tx) if (tx is not None and failed is not None) else None,
         "computed_at": score_row.get("computed_at") if score_row else None,
     }
 
@@ -142,3 +171,89 @@ def render_badge_svg(project_name: str, score: Optional[float]) -> str:
     <text x="{label_width + value_width / 2}" y="14">{value}</text>
   </g>
 </svg>"""
+
+
+# --- Rollup-backed series (2026-10-04) ----------------------------------------
+
+def build_network_daily(rows: list[dict], today: Optional[str] = None) -> list[dict]:
+    """
+    Shape daily_network_metrics rows for the API with derived rates.
+
+    `partial` is True for the current UTC day (still accruing). `source` is
+    passed through: "raw_backfill" days predate rollup ingestion, so their
+    failed_tx_count / contract_creations / blocks are unknown and reported as
+    None here (never as a misleading 0) - see docs/decisions/ADR-003.
+    Derived: failed_rate (failed/tx), avg_gas_per_tx_usdc (gas/tx, 6-decimal view).
+    """
+    today = today or datetime.now(timezone.utc).date().isoformat()
+    out = []
+    for r in rows:
+        backfill = r.get("source") == "raw_backfill"
+        tx = r.get("tx_count")
+        out.append({
+            "day": r["day"],
+            "tx_count": tx,
+            "failed_tx_count": None if backfill else r.get("failed_tx_count"),
+            "failed_rate": None if backfill else _rate(r.get("failed_tx_count"), tx),
+            "usdc_gas_paid": _to_float(r.get("usdc_gas_paid")),
+            "avg_gas_per_tx_usdc": _rate(r.get("usdc_gas_paid"), tx),
+            "contract_creations": None if backfill else r.get("contract_creations"),
+            "blocks": None if backfill else r.get("blocks"),
+            "token_transfer_count": r.get("token_transfer_count"),
+            "active_addresses": r.get("active_addresses"),
+            "source": r.get("source"),
+            "partial": r["day"] >= today,
+        })
+    return out
+
+
+def build_token_daily(rows: list[dict]) -> list[dict]:
+    """Shape daily_token_metrics rows. volume is in the token's own 6-decimal
+    units (never mixed across tokens); avg_transfer_size = volume / transfers."""
+    out = []
+    for r in rows:
+        addr = (r.get("token_address") or "").lower()
+        out.append({
+            "day": r["day"],
+            "token_address": addr,
+            "symbol": TOKEN_SYMBOLS.get(addr),
+            "transfer_count": r.get("transfer_count"),
+            "volume": _to_float(r.get("volume")),
+            "avg_transfer_size": _rate(r.get("volume"), r.get("transfer_count")),
+        })
+    return out
+
+
+def build_top_contracts(rows: list[dict]) -> list[dict]:
+    return [{
+        "contract_address": r["contract_address"],
+        "project_id": r.get("project_id"),
+        "project_name": r.get("project_name"),
+        "category": r.get("category"),
+        "tx_count": r.get("tx_count"),
+        "failed_tx_count": r.get("failed_tx_count"),
+        "failed_rate": _rate(r.get("failed_tx_count"), r.get("tx_count")),
+        "usdc_gas": _to_float(r.get("usdc_gas")),
+        "gas_share": _to_float(r.get("gas_share")),
+    } for r in rows]
+
+
+def build_project_daily(rows: list[dict]) -> list[dict]:
+    return [{
+        "day": r["day"],
+        "tx_count": r.get("tx_count"),
+        "failed_tx_count": r.get("failed_tx_count"),
+        "failed_rate": _rate(r.get("failed_tx_count"), r.get("tx_count")),
+        "usdc_gas": _to_float(r.get("usdc_gas")),
+        "unique_users": r.get("unique_users"),
+    } for r in rows]
+
+
+def build_score_history(rows: list[dict]) -> list[dict]:
+    return [{
+        "computed_at": r["computed_at"],
+        "score": _to_float(r.get("score")),
+        "tvl_usd": _to_float(r.get("tvl_usd")),
+        "usdc_gas_7d": _to_float(r.get("usdc_gas_7d")),
+        "unique_users_7d": r.get("unique_users_7d"),
+    } for r in rows]

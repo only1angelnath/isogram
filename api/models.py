@@ -14,10 +14,14 @@ class ProjectSummary(BaseModel):
     id: str
     name: str
     category: Optional[str] = None
+    tier: Optional[str] = None  # "curated" (hand-seeded) | "discovered" (auto-promoted)
     score: Optional[float] = None
     tvl_usd: Optional[float] = None
     usdc_gas_7d: Optional[float] = None
     unique_users_7d: Optional[int] = None
+    tx_count_7d: Optional[int] = None
+    failed_tx_7d: Optional[int] = None
+    failed_rate_7d: Optional[float] = None
     computed_at: Optional[str] = None
 
 
@@ -87,3 +91,56 @@ class AdminReviewRequest(BaseModel):
             raise ValueError("decision must be 'approve' or 'reject'")
         return v
 
+
+
+class NetworkDay(BaseModel):
+    day: str
+    tx_count: Optional[int] = None
+    failed_tx_count: Optional[int] = None
+    failed_rate: Optional[float] = None
+    usdc_gas_paid: Optional[float] = None
+    avg_gas_per_tx_usdc: Optional[float] = None
+    contract_creations: Optional[int] = None
+    blocks: Optional[int] = None
+    token_transfer_count: Optional[int] = None
+    active_addresses: Optional[int] = None
+    source: Optional[str] = None
+    partial: bool = False
+
+
+class TokenDay(BaseModel):
+    day: str
+    token_address: str
+    symbol: Optional[str] = None
+    transfer_count: Optional[int] = None
+    volume: Optional[float] = None
+    avg_transfer_size: Optional[float] = None
+
+
+class TopContract(BaseModel):
+    contract_address: str
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    category: Optional[str] = None
+    tx_count: Optional[int] = None
+    failed_tx_count: Optional[int] = None
+    failed_rate: Optional[float] = None
+    usdc_gas: Optional[float] = None
+    gas_share: Optional[float] = None
+
+
+class ProjectDay(BaseModel):
+    day: str
+    tx_count: Optional[int] = None
+    failed_tx_count: Optional[int] = None
+    failed_rate: Optional[float] = None
+    usdc_gas: Optional[float] = None
+    unique_users: Optional[int] = None
+
+
+class ScorePoint(BaseModel):
+    computed_at: str
+    score: Optional[float] = None
+    tvl_usd: Optional[float] = None
+    usdc_gas_7d: Optional[float] = None
+    unique_users_7d: Optional[int] = None

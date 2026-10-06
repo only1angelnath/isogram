@@ -30,7 +30,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 
 import requests
 
@@ -46,6 +46,22 @@ from worker import (
     _call_with_retry,
     _StickyPoolIndex,
 )
+
+# --- USDC has TWO event streams (docs.arc.io/arc/references/usdc-system-events) ---
+# * 0xffff...fffe  native system log (EIP-7708), 18 decimals: logged ONCE for
+#   EVERY explicit USDC movement - native sends, ERC-20 transfers, mint, burn.
+# * 0x3600...0000  ERC-20 contract, 6 decimals: ERC-20-interface calls ONLY.
+# An ERC-20 transfer() emits BOTH, so counting both double-counts, and the
+# ERC-20 stream alone MISSES plain native sends (measured 2026-10-05 on 200
+# live blocks: it missed 74.4% of USDC volume). The system log is therefore the
+# single source for USDC; the 0x3600 log is deliberately IGNORED here. The
+# 18-decimal value is converted to the 6-decimal view exactly once, below, and
+# rows are keyed by the canonical USDC address 0x3600... (the token's identity).
+SYSTEM_USDC_EMITTER = "0xfffffffffffffffffffffffffffffffffffffffe"
+USDC_ERC20_ADDRESS = "0x3600000000000000000000000000000000000000"
+SYSTEM_LOG_DECIMALS = 18
+_ZERO_TOPIC = "0x" + "0" * 64
+_USDC_QUANTUM = Decimal("0.000001")  # stored/displayed USDC is always the 6-decimal view
 
 # Blocks per atomic apply. Smaller = less work lost on a failure and smaller
 # request bodies; larger = fewer DB round-trips.
@@ -163,16 +179,29 @@ class BatchAccumulator:
                 self.missing_from += 1
 
             for log in r.get("logs") or []:
-                token = (log.get("address") or "").lower()
-                info = TRACKED_TOKENS.get(token)
-                if info is None:
-                    continue
+                emitter = (log.get("address") or "").lower()
+                if emitter == USDC_ERC20_ADDRESS:
+                    continue  # duplicate of the system log (see SYSTEM_USDC_EMITTER note)
                 topics = log.get("topics") or []
                 if len(topics) < 3 or topics[0].lower() != TRANSFER_EVENT_TOPIC:
                     continue
                 data = log.get("data") or "0x"
                 raw_amount = int(data, 16) if data not in ("0x", "") else 0
-                amount = decode_erc20_transfer_amount(raw_amount, info["decimals"])
+
+                if emitter == SYSTEM_USDC_EMITTER:
+                    # Mint/burn are supply changes (zero-address leg), not movement
+                    # between holders: excluded from transfer count and volume.
+                    if topics[1].lower() == _ZERO_TOPIC or topics[2].lower() == _ZERO_TOPIC:
+                        continue
+                    token = USDC_ERC20_ADDRESS
+                    amount = decode_erc20_transfer_amount(raw_amount, SYSTEM_LOG_DECIMALS)
+                else:
+                    info = TRACKED_TOKENS.get(emitter)
+                    if info is None:
+                        continue
+                    token = emitter
+                    amount = decode_erc20_transfer_amount(raw_amount, info["decimals"])
+
                 tok = self.tokens.setdefault((day, token), [0, Decimal("0")])
                 tok[0] += 1
                 tok[1] += amount
@@ -191,7 +220,8 @@ class BatchAccumulator:
                 for d, v in self.network.items()
             ],
             "p_tokens": [
-                {"day": d, "token_address": t, "transfer_count": v[0], "volume": str(v[1])}
+                {"day": d, "token_address": t, "transfer_count": v[0],
+                 "volume": str(v[1].quantize(_USDC_QUANTUM, rounding=ROUND_HALF_EVEN))}
                 for (d, t), v in self.tokens.items()
             ],
             "p_addresses": {d: sorted(s) for d, s in self.addresses.items()},

@@ -56,6 +56,18 @@ def list_discovered(status: str = "unclassified", limit: int = 50, client=Depend
 
 
 def _manual_classify(client, address: str, category: str, name: str | None) -> None:
+    """
+    Set a contract's category/name and queue it for promotion.
+
+    Existing rows get a plain UPDATE; only unseen addresses are INSERTed.
+    (Fixed 2026-10-06: this used to upsert in both cases. PostgREST's upsert is
+    INSERT ... ON CONFLICT DO UPDATE, and Postgres checks NOT NULL on the
+    proposed row BEFORE it notices the conflict - so for any address already in
+    discovered_contracts the missing first_seen/last_seen raised a not-null
+    violation and the route returned a 500. It only ever worked for brand-new
+    addresses, which is not the case that matters: manual review is for
+    contracts discovery has already seen.)
+    """
     now = datetime.now(timezone.utc).isoformat()
     address = address.lower()
 
@@ -65,17 +77,19 @@ def _manual_classify(client, address: str, category: str, name: str | None) -> N
         .eq("contract_address", address)
         .execute()
     )
-    row = {
-        "contract_address": address,
+    fields = {
         "category": category,
         "gecko_name": name,
         "status": "needs_review",
         "classified_at": now,
         "updated_at": now,
     }
-    if not existing.data:
-        row.update({"call_count": 0, "first_seen": now, "last_seen": now})
-    client.table("discovered_contracts").upsert(row, on_conflict="contract_address").execute()
+    if existing.data:
+        client.table("discovered_contracts").update(fields).eq("contract_address", address).execute()
+    else:
+        client.table("discovered_contracts").insert(
+            {"contract_address": address, "call_count": 0, "first_seen": now, "last_seen": now, **fields}
+        ).execute()
 
 
 @router.post("/classify")

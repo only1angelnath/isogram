@@ -15,12 +15,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import HealthResponse
-from routes import badge, gas, network, projects, scores, tvl, submit, admin
+from routes import badge, gas, metrics, network, projects, scores, tvl, submit, admin
 
 app = FastAPI(
     title="Isogram API",
     description="The data truth layer for Arc — USDC gas/flow, TVL, and Arc Native Score.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # CORS is deliberately wide open, not a dev-mode leftover: this is a public
@@ -42,6 +42,7 @@ app.include_router(tvl.router)
 app.include_router(scores.router)
 app.include_router(badge.router)
 app.include_router(network.router)
+app.include_router(metrics.router)
 app.include_router(submit.router)
 app.include_router(admin.router)
 @app.get("/", response_model=HealthResponse)

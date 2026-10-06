@@ -19,6 +19,7 @@ from rollup import BatchAccumulator, RpcResultError, _raw_rpc_on_pool, run_rollu
 from worker import TRANSFER_EVENT_TOPIC, _StickyPoolIndex
 
 USDC = "0x3600000000000000000000000000000000000000"
+SYSTEM = "0xfffffffffffffffffffffffffffffffffffffffe"
 EURC = "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1"
 SENDER_A = "0x" + "aa" * 20
 SENDER_B = "0x" + "bb" * 20
@@ -48,6 +49,16 @@ def usdc_transfer_log(raw_amount: int, token=USDC):
     }
 
 
+def system_log(raw_18dec: int, frm=None, to=None):
+    """Native system Transfer (EIP-7708), 18 decimals, emitted for EVERY USDC movement."""
+    zero = "0x" + "0" * 64
+    return {
+        "address": SYSTEM,
+        "topics": [TRANSFER_EVENT_TOPIC, frm or _pad_addr(SENDER_A), to or _pad_addr(SENDER_B)],
+        "data": hex(raw_18dec),
+    }
+
+
 def test_gas_matches_hand_calculation_6_decimal_view():
     # 21000 gas * 2e11 wei = 4.2e15 wei = 0.0042 USDC (18-dec native -> human USDC)
     acc = BatchAccumulator(set())
@@ -56,14 +67,49 @@ def test_gas_matches_hand_calculation_6_decimal_view():
     assert acc.contracts[(DAY, CONTRACT)][2] == Decimal("0.0042")
 
 
-def test_native_and_erc20_views_never_double_count():
-    # A tx that pays gas AND emits a USDC Transfer: gas stays gas, token volume
-    # stays token volume - they are never summed together (BUGS.md #1).
+def test_gas_and_usdc_volume_are_separate_quantities():
+    # A tx that pays gas AND moves 1.5 USDC: gas stays gas, volume stays volume (BUGS.md #1).
     acc = BatchAccumulator(set())
-    acc.add_block(TS, [receipt(logs=[usdc_transfer_log(1_500_000)])])
+    acc.add_block(TS, [receipt(logs=[system_log(15 * 10**17)])])
     assert acc.network[DAY]["usdc_gas_paid"] == Decimal("0.0042")
     assert acc.tokens[(DAY, USDC)] == [1, Decimal("1.5")]
     assert acc.network[DAY]["token_transfer_count"] == 1
+
+
+def test_erc20_transfer_emits_both_streams_and_is_counted_ONCE():
+    # Arc docs: one ERC-20 transfer() = a 6-dec log from 0x3600 AND an 18-dec system log.
+    acc = BatchAccumulator(set())
+    acc.add_block(TS, [receipt(logs=[system_log(25 * 10**17), usdc_transfer_log(2_500_000)])])
+    assert acc.tokens[(DAY, USDC)] == [1, Decimal("2.5")]  # not 2 transfers / 5.0 USDC
+    assert acc.network[DAY]["token_transfer_count"] == 1
+
+
+def test_plain_native_send_is_counted_via_system_log_only():
+    # No 0x3600 log at all - the stream we used before 2026-10-05 would have missed this.
+    acc = BatchAccumulator(set())
+    acc.add_block(TS, [receipt(logs=[system_log(10**18)])])
+    assert acc.tokens[(DAY, USDC)] == [1, Decimal("1")]
+
+
+def test_erc20_stream_alone_is_ignored_for_usdc():
+    acc = BatchAccumulator(set())
+    acc.add_block(TS, [receipt(logs=[usdc_transfer_log(1_500_000)])])
+    assert acc.tokens == {} and acc.network[DAY]["token_transfer_count"] == 0
+
+
+def test_mint_and_burn_system_logs_are_not_volume():
+    zero = "0x" + "0" * 64
+    acc = BatchAccumulator(set())
+    acc.add_block(TS, [receipt(logs=[system_log(10**18, frm=zero)]), receipt(logs=[system_log(10**18, to=zero)])])
+    assert acc.tokens == {}
+
+
+def test_18_to_6_decimal_conversion_quantizes_in_payload():
+    # 1.123456789012345678 USDC native -> stored at 6 decimals
+    acc = BatchAccumulator(set())
+    acc.add_block(TS, [receipt(logs=[system_log(1_123_456_789_012_345_678)])])
+    p = acc.to_payload()["p_tokens"][0]
+    assert p["token_address"] == USDC and p["volume"] == "1.123457" and p["transfer_count"] == 1
 
 
 def test_failed_tx_and_contract_creation_counted():
@@ -114,7 +160,7 @@ def test_missing_effective_gas_price_fails_loud():
 def test_untracked_token_and_malformed_transfer_ignored():
     acc = BatchAccumulator(set())
     malformed = {"address": USDC, "topics": [TRANSFER_EVENT_TOPIC, _pad_addr(SENDER_A)], "data": "0x01"}
-    acc.add_block(TS, [receipt(logs=[usdc_transfer_log(5, token="0x" + "ee" * 20), malformed])])
+    acc.add_block(TS, [receipt(logs=[usdc_transfer_log(5, token="0x" + "ee" * 20), malformed, {"address": SYSTEM, "topics": [TRANSFER_EVENT_TOPIC], "data": "0x01"}])])
     assert acc.tokens == {} and acc.network[DAY]["token_transfer_count"] == 0
 
 
@@ -126,7 +172,7 @@ def test_eurc_tracked_with_6_decimals():
 
 def test_order_independent_and_json_serialisable():
     blocks = [(TS, [receipt(frm=SENDER_A)]), (TS + 1, [receipt(frm=SENDER_B, status="0x0")]),
-              (TS + 2, [receipt(logs=[usdc_transfer_log(1_000_000)])])]
+              (TS + 2, [receipt(logs=[system_log(10**18)])])]
     a, b = BatchAccumulator({CONTRACT}), BatchAccumulator({CONTRACT})
     for ts, rc in blocks:
         a.add_block(ts, rc)
