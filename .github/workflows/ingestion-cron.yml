@@ -41,6 +41,9 @@ jobs:
         working-directory: ingestion
         run: pip install -r requirements.txt
 
+      - name: Record start time
+        run: echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Run ingestion worker
         working-directory: ingestion
         env:
@@ -89,11 +92,37 @@ jobs:
       # so each run starts the next itself instead of waiting for the schedule.
       # (A workflow cannot listen to its own completion via `workflow_run` - GitHub rejects
       # the file - but a workflow_dispatch created with GITHUB_TOKEN is explicitly allowed.)
-      # Success-only: a failing run never retries in a tight loop; the schedule above is
-      # the restart path after a failure. The new run waits in the concurrency group until
-      # this job finishes, then starts immediately.
+      # The new run waits in the concurrency group until this job finishes, then starts.
+      # Retried, and a failure to chain is a warning, never a failed job (the work is done).
       - name: Chain the next run
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ingestion-cron.yml --ref "${{ github.ref_name }}"
+        run: |
+          for i in 1 2 3; do
+            gh workflow run ingestion-cron.yml --ref "${{ github.ref_name }}" && exit 0
+            echo "chain attempt $i failed; retrying in 20s"; sleep 20
+          done
+          echo "::warning title=Could not chain the next run::the schedule will restart ingestion"
+
+      # After a failure that happened AFTER the run had been going for 10+ minutes (so not a
+      # deterministic startup failure), back off 5 minutes and try again instead of leaving the
+      # data stale until GitHub's next scheduled run (hours). A fast failure does not chain,
+      # which keeps a genuinely broken deploy from looping.
+      - name: Chain after a late failure (with backoff)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          elapsed=$(( $(date +%s) - ${T0:-$(date +%s)} ))
+          if [ "$elapsed" -lt 600 ]; then
+            echo "Failed after only ${elapsed}s - not chaining (fix the cause; the schedule is the restart path)."
+            exit 0
+          fi
+          echo "Failed after ${elapsed}s - retrying in 300s."
+          sleep 300
+          for i in 1 2 3; do
+            gh workflow run ingestion-cron.yml --ref "${{ github.ref_name }}" && exit 0
+            sleep 20
+          done
+          echo "::warning title=Could not chain the next run::the schedule will restart ingestion"

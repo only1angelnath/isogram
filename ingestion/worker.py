@@ -617,32 +617,43 @@ def run():
           f"{summary['seconds']:.0f}s. Checkpoint now at {summary['checkpoint']}, lag {summary['lag']}.")
 
 
-if __name__ == "__main__":
-    from discovery import run_discovery  # imported here, not at module level,
-    # to avoid a circular import — discovery.py now imports worker.py's RPC
-    # pool machinery (get_web3_pool, _StickyPoolIndex, _call_on_pool) for
-    # its EOA check, so worker.py can't import discovery at module level
-    # anymore without both modules trying to fully load each other first.
+def _run_discovery_safely() -> None:
+    """
+    Discovery is housekeeping, never a reason to fail (and so un-chain) an ingestion run.
+    INCIDENT 2026-10-07: an unguarded run_discovery() crashed on a slow SQL function right
+    after every successful 55-minute ingestion run; the job went red, the success-only
+    chain never fired, and the data went stale for hours. A discovery failure is now
+    surfaced loudly - a GitHub ::warning:: annotation plus the full traceback - without
+    changing the job's result.
+    """
+    from discovery import run_discovery  # lazy: discovery imports this module's RPC pool
 
+    try:
+        result = run_discovery()
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning title=Discovery failed::{type(exc).__name__}: {exc}")
+        return
+    print(f"Discovery: {result['touched']} touched, "
+          f"{result.get('trending_seeded', 0)} seeded from trending pools, "
+          f"{result['classified']} classified, "
+          f"{result['promoted']} promoted.")
+
+
+def main() -> None:
     start = time.monotonic()
     try:
         run()
     except Exception:
-        # run_discovery() is independent of ingestion succeeding — a 429
-        # (or any other) failure in run() should not also silently prevent
-        # discovery from processing whatever unmapped contracts already
-        # exist in gas_events from prior successful runs. Re-raise after,
-        # so the job still shows red in Actions (a real ingestion failure
-        # should not go unnoticed), but discovery gets its chance first.
-        discovery_result = run_discovery()
-        print(f"Discovery: {discovery_result['touched']} touched, "
-              f"{discovery_result.get('trending_seeded', 0)} seeded from trending pools, "
-              f"{discovery_result['classified']} classified, "
-              f"{discovery_result['promoted']} promoted.")
+        # A real ingestion failure must stay red. Discovery still gets its chance (it works
+        # from rollups already stored), but can never mask or replace the ingestion error.
+        _run_discovery_safely()
         raise
-    discovery_result = run_discovery()
-    print(f"Discovery: {discovery_result['touched']} touched, "
-          f"{discovery_result.get('trending_seeded', 0)} seeded from trending pools, "
-          f"{discovery_result['classified']} classified, "
-          f"{discovery_result['promoted']} promoted.")
+    _run_discovery_safely()
     print(f"Finished in {time.monotonic() - start:.1f}s")
+
+
+if __name__ == "__main__":
+    main()

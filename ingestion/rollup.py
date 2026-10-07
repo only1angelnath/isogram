@@ -79,6 +79,9 @@ RUN_TIME_BUDGET_SECONDS = float(os.environ.get("RUN_TIME_BUDGET_SECONDS", "1500"
 FOLLOW_TIP = os.environ.get("FOLLOW_TIP", "true").strip().lower() in ("1", "true", "yes")
 TIP_POLL_SECONDS = float(os.environ.get("TIP_POLL_SECONDS", "10"))
 
+# Upper bound on prune_rollup_long_tail calls per run (50,000 rows each).
+MAINTENANCE_MAX_CHUNKS = int(os.environ.get("MAINTENANCE_MAX_CHUNKS", "20"))
+
 
 class RpcResultError(Exception):
     """An endpoint answered, but with a JSON-RPC error or a null result."""
@@ -338,15 +341,25 @@ def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_
 
 
 def run_maintenance(client) -> None:
-    """Bound the two address tables and the contract long tail. Best-effort."""
-    for fn, params in (
-        # default window (8 days): unique-user counts need 7 days of distinct
-        # addresses; daily counts are persisted before anything is pruned.
-        ("prune_rollup_addresses", {}),
-        ("prune_rollup_long_tail", {}),
-    ):
-        try:
-            res = client.rpc(fn, params).execute()
-            print(f"maintenance {fn}: {res.data}")
-        except Exception as exc:  # never fail ingestion over housekeeping
-            print(f"maintenance {fn} failed (non-fatal): {exc}", file=sys.stderr)
+    """Bound the address tables and the contract long tail. Best-effort: never fails a run."""
+    try:
+        # default window (8 days): unique-user counts need 7 days of distinct addresses;
+        # daily counts are persisted before anything is pruned.
+        res = client.rpc("prune_rollup_addresses", {}).execute()
+        print(f"maintenance prune_rollup_addresses: {res.data}")
+    except Exception as exc:  # never fail ingestion over housekeeping
+        print(f"maintenance prune_rollup_addresses failed (non-fatal): {exc}", file=sys.stderr)
+
+    # Long-tail pruning is chunked on the database side (a single big DELETE can exceed the
+    # statement timeout); loop until the function says nothing is left, with a hard cap.
+    deleted = 0
+    try:
+        for _ in range(MAINTENANCE_MAX_CHUNKS):
+            res = client.rpc("prune_rollup_long_tail", {}).execute()
+            data = res.data or {}
+            deleted += int(data.get("long_tail_rows_deleted", 0))
+            if not data.get("more"):
+                break
+        print(f"maintenance prune_rollup_long_tail: {deleted} rows deleted")
+    except Exception as exc:
+        print(f"maintenance prune_rollup_long_tail failed after {deleted} rows (non-fatal): {exc}", file=sys.stderr)

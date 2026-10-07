@@ -53,8 +53,15 @@ jobs:
         run: python backfill_rollup.py
 
       # Chain until the range is complete (the script writes done=true when it is).
+      # Retried; the 2026-10-07 run chained twice and then failed once with a bare
+      # "exit code 1" from `gh`, so errors are now shown and retried instead of failing the job.
       - name: Chain the next run
         if: success() && steps.backfill.outputs.done != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run backfill-rollup.yml --ref "${{ github.ref_name }}"
+        run: |
+          for i in 1 2 3 4; do
+            if gh workflow run backfill-rollup.yml --ref "${{ github.ref_name }}"; then exit 0; fi
+            echo "chain attempt $i failed; retrying in 30s"; sleep 30
+          done
+          echo "::warning title=Could not chain the backfill::start it again manually (it resumes from its checkpoint)"
