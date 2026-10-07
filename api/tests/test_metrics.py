@@ -242,3 +242,36 @@ def test_network_daily_survives_missing_freshness(client, monkeypatch):
     monkeypatch.setattr(m, "fetch_network_daily", lambda c, days: [
         {"day": "2026-10-04", "tx_count": 10, "failed_tx_count": 1, "usdc_gas_paid": "1", "source": "live"}])
     assert client.get("/metrics/network/daily").status_code == 200
+
+
+# ------------------------------------------------------------------- segments
+
+def test_segment_for_maps_every_discovery_category():
+    expected = {
+        "dex": "defi", "lending": "defi", "yield": "defi", "liquid-staking": "defi",
+        "launchpad": "launchpad",
+        "infra": "infra", "bridge": "infra", "oracle": "infra", "governance": "infra",
+        "stablecoin": "stablecoin", "institutional": "stablecoin",
+        "token": "token", "meme": "token", "wrapped": "token",
+    }
+    for cat, seg in expected.items():
+        assert aggregate.segment_for(cat) == seg, cat
+    assert aggregate.segment_for("DEX") == "defi"          # case-insensitive
+    assert aggregate.segment_for(None) == "other"           # never guessed
+    assert aggregate.segment_for("something-new") == "other"
+
+
+def test_summary_carries_segment():
+    s = aggregate.build_project_summary({"id": "r", "name": "R", "category": "dex"}, None)
+    assert s["segment"] == "defi"
+
+
+def test_users_zero_with_transactions_is_not_measured_not_zero():
+    # promoted after those days were ingested: has tx but no per-contract sender tracking
+    s = aggregate.build_project_summary({"id": "r", "name": "R", "category": "dex"},
+                                        {"score": "0.2", "tx_count_7d": 5000, "failed_tx_7d": 1, "unique_users_7d": 0})
+    assert s["unique_users_7d"] is None
+    # genuinely idle project: no tx and no users -> a real zero is kept
+    idle = aggregate.build_project_summary({"id": "i", "name": "I", "category": "dex"},
+                                           {"score": "0", "tx_count_7d": 0, "failed_tx_7d": 0, "unique_users_7d": 0})
+    assert idle["unique_users_7d"] == 0

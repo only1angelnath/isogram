@@ -14,6 +14,8 @@ class ProjectSummary(BaseModel):
     id: str
     name: str
     category: Optional[str] = None
+    # defi | launchpad | infra | token | stablecoin | other - decides which metrics apply
+    segment: Optional[str] = None
     tier: Optional[str] = None  # "curated" (hand-seeded) | "discovered" (auto-promoted)
     score: Optional[float] = None
     tvl_usd: Optional[float] = None

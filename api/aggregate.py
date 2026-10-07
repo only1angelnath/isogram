@@ -14,6 +14,23 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
+# Category -> segment. A segment decides which metrics make sense for a project
+# (DeFiLlama-style): TVL means something for a DEX or lender, nothing for a router
+# proxy or a memecoin; the composite score only makes sense inside a peer group of
+# comparable DeFi protocols. Unknown / missing category -> "other" (never guessed).
+SEGMENT_BY_CATEGORY = {
+    "dex": "defi", "lending": "defi", "yield": "defi", "liquid-staking": "defi",
+    "launchpad": "launchpad",
+    "infra": "infra", "bridge": "infra", "oracle": "infra", "governance": "infra",
+    "stablecoin": "stablecoin", "institutional": "stablecoin",
+    "token": "token", "meme": "token", "wrapped": "token",
+}
+
+
+def segment_for(category: Optional[str]) -> str:
+    return SEGMENT_BY_CATEGORY.get((category or "").strip().lower(), "other")
+
+
 # A pipeline whose last applied block is older than this is reported as "behind".
 LIVE_LAG_SECONDS = 600
 
@@ -76,15 +93,22 @@ def build_project_summary(project: dict, score_row: Optional[dict]) -> dict:
     """
     tx = score_row.get("tx_count_7d") if score_row else None
     failed = score_row.get("failed_tx_7d") if score_row else None
+    users = score_row.get("unique_users_7d") if score_row else None
+    if users == 0 and tx:
+        # Every transaction has a sender, so "transactions but zero users" cannot be
+        # real: the contract was not tracked for senders when those days were ingested
+        # (it was promoted after). Report "not measured", never a false 0.
+        users = None
     return {
         "id": project["id"],
         "name": project["name"],
         "category": project.get("category"),
+        "segment": segment_for(project.get("category")),
         "tier": "curated" if project.get("seeded") else "discovered",
         "score": _to_float(score_row["score"]) if score_row else None,
         "tvl_usd": _to_float(score_row.get("tvl_usd")) if score_row else None,
         "usdc_gas_7d": _to_float(score_row.get("usdc_gas_7d")) if score_row else None,
-        "unique_users_7d": score_row.get("unique_users_7d") if score_row else None,
+        "unique_users_7d": users,
         "tx_count_7d": tx,
         "failed_tx_7d": failed,
         "failed_rate_7d": _rate(failed, tx) if (tx is not None and failed is not None) else None,
