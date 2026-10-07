@@ -10,16 +10,6 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}  # allow manual runs from the Actions tab
-  # Chain: when a run finishes SUCCESSFULLY, start the next one immediately. Added
-  # 2026-10-07 because GitHub fired the `*/5` cron only every 3-5 HOURS, so the data
-  # fell further behind each time (lag 21h -> 32h). Success-only, so a failing run
-  # cannot start a tight retry loop; the schedule above is the fallback after a failure
-  # (GitHub also limits how many hops a workflow_run chain may make, so the schedule
-  # remains the restart path).
-  workflow_run:
-    workflows: ["Ingestion cron"]
-    types: [completed]
-    branches: [master]
 
 # Queue instead of overlapping: two simultaneous runs would race on the
 # checkpoint. (apply_ingest_batch() rejects a stale batch rather than
@@ -30,8 +20,11 @@ concurrency:
 
 jobs:
   ingest:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    # Needed only by the last step, which starts the next run (see "Chain the next run").
+    permissions:
+      contents: read
+      actions: write
     # 2026-10-07: 45 -> 75. Runs now follow the chain tip for up to
     # RUN_TIME_BUDGET_SECONDS (55 min) after catching up, then discovery (~5 min) runs.
     # The repo is public, so Actions minutes are free; a private repo would burn its
@@ -91,3 +84,16 @@ jobs:
           FOLLOW_TIP: "true"
           TIP_POLL_SECONDS: "10"
         run: python worker.py
+
+      # Chain the next run. GitHub's `*/5` cron was observed firing only every 3-5 HOURS,
+      # so each run starts the next itself instead of waiting for the schedule.
+      # (A workflow cannot listen to its own completion via `workflow_run` - GitHub rejects
+      # the file - but a workflow_dispatch created with GITHUB_TOKEN is explicitly allowed.)
+      # Success-only: a failing run never retries in a tight loop; the schedule above is
+      # the restart path after a failure. The new run waits in the concurrency group until
+      # this job finishes, then starts immediately.
+      - name: Chain the next run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ingestion-cron.yml --ref "${{ github.ref_name }}"
