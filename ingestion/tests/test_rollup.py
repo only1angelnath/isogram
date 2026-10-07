@@ -329,3 +329,74 @@ def test_apply_batch_sends_end_block_timestamp_for_freshness(monkeypatch):
     assert params["p_end_block_ts"].startswith("2026-09-21") or params["p_end_block_ts"].startswith("2026-09-22")
     from datetime import datetime, timezone
     assert datetime.fromisoformat(params["p_end_block_ts"]) == datetime.fromtimestamp(TS + 100, tz=timezone.utc)
+
+
+# --------------------------------------------------------- follow-the-tip mode
+
+class _Clock:
+    """Fake time so follow-mode tests are instant and cannot hang."""
+    def __init__(self): self.t = 0.0; self.sleeps = []
+    def monotonic(self): return self.t
+    def sleep(self, s): self.sleeps.append(s); self.t += s
+
+
+def _follow_setup(monkeypatch, follow=True, budget=60, poll=10, batch=50):
+    import types
+    clock = _Clock()
+    monkeypatch.setattr(rollup, "time", types.SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep))
+    monkeypatch.setattr(rollup, "FOLLOW_TIP", follow)
+    monkeypatch.setattr(rollup, "RUN_TIME_BUDGET_SECONDS", budget)
+    monkeypatch.setattr(rollup, "TIP_POLL_SECONDS", poll)
+    monkeypatch.setattr(rollup, "BATCH_BLOCKS", batch)
+    _patch_fetch(monkeypatch)
+    return clock
+
+
+def test_follow_mode_keeps_applying_new_blocks_after_catching_up(monkeypatch):
+    clock = _follow_setup(monkeypatch)
+    tips = iter([130, 130, 175])           # chain grows between polls, then stalls
+    last = [175]
+    def tip():
+        last[0] = next(tips, last[0]); return last[0]
+    client = _FakeClient()
+    out = run_rollup(client, [object()], _StickyPoolIndex(), {}, last_synced=0, latest_block=100, max_blocks=10_000, tip_fn=tip)
+    ranges = [(p["p_start_block"], p["p_end_block"]) for _, p in client.calls]
+    assert ranges == [(1, 50), (51, 100), (101, 130), (131, 175)]   # contiguous, nothing skipped
+    assert out["checkpoint"] == 175 and out["lag"] == 0
+    assert clock.sleeps and clock.t > 60    # it waited for new blocks and only stopped at the budget
+
+
+def test_follow_mode_off_stops_at_the_tip_without_waiting(monkeypatch):
+    clock = _follow_setup(monkeypatch, follow=False)
+    client = _FakeClient()
+    out = run_rollup(client, [object()], _StickyPoolIndex(), {}, 0, 100, 10_000, tip_fn=lambda: 999)
+    assert out["checkpoint"] == 100 and clock.sleeps == []
+
+
+def test_follow_mode_never_exceeds_max_blocks_per_run(monkeypatch):
+    _follow_setup(monkeypatch)
+    client = _FakeClient()
+    out = run_rollup(client, [object()], _StickyPoolIndex(), {}, last_synced=1000, latest_block=1100,
+                     max_blocks=120, tip_fn=lambda: 5000)
+    assert out["checkpoint"] == 1120 and client.calls[-1][1]["p_end_block"] == 1120
+
+
+def test_follow_mode_survives_a_failing_tip_poll(monkeypatch):
+    _follow_setup(monkeypatch)
+    calls = {"n": 0}
+    def tip():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("rpc blip")
+        return 120
+    client = _FakeClient()
+    out = run_rollup(client, [object()], _StickyPoolIndex(), {}, 0, 100, 10_000, tip_fn=tip)
+    assert out["checkpoint"] == 120 and calls["n"] >= 2
+
+
+def test_follow_mode_always_terminates_even_if_tip_never_works(monkeypatch):
+    clock = _follow_setup(monkeypatch)
+    def tip():
+        raise RuntimeError("down")
+    out = run_rollup(_FakeClient(), [object()], _StickyPoolIndex(), {}, 0, 100, 10_000, tip_fn=tip)
+    assert out["checkpoint"] == 100 and clock.t > 60

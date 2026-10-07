@@ -10,6 +10,16 @@ on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}  # allow manual runs from the Actions tab
+  # Chain: when a run finishes SUCCESSFULLY, start the next one immediately. Added
+  # 2026-10-07 because GitHub fired the `*/5` cron only every 3-5 HOURS, so the data
+  # fell further behind each time (lag 21h -> 32h). Success-only, so a failing run
+  # cannot start a tight retry loop; the schedule above is the fallback after a failure
+  # (GitHub also limits how many hops a workflow_run chain may make, so the schedule
+  # remains the restart path).
+  workflow_run:
+    workflows: ["Ingestion cron"]
+    types: [completed]
+    branches: [master]
 
 # Queue instead of overlapping: two simultaneous runs would race on the
 # checkpoint. (apply_ingest_batch() rejects a stale batch rather than
@@ -20,14 +30,13 @@ concurrency:
 
 jobs:
   ingest:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    # Bumped 10 -> 45: MAX_BLOCKS_PER_RUN raised 100 -> 3000 in worker.py to
-    # cope with GitHub's scheduled trigger firing hours apart instead of
-    # every 5 minutes (see worker.py's MAX_BLOCKS_PER_RUN comment). A run
-    # doing 3000 blocks needs real headroom, especially before we know how
-    # much the sticky-endpoint fix actually improves real throughput. If
-    # runs are finishing well under this, it's fine to lower again.
-    timeout-minutes: 45
+    # 2026-10-07: 45 -> 75. Runs now follow the chain tip for up to
+    # RUN_TIME_BUDGET_SECONDS (55 min) after catching up, then discovery (~5 min) runs.
+    # The repo is public, so Actions minutes are free; a private repo would burn its
+    # monthly allowance in days with an always-on job like this.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -70,8 +79,15 @@ jobs:
           # Raise RPC_CONCURRENCY only after watching logs for 429s.
           RPC_CONCURRENCY: "4"
           BATCH_BLOCKS: "500"
-          MAX_BLOCKS_PER_RUN: "20000"
-          # Stop starting new sub-batches after 25 min (job timeout is 45);
-          # the checkpoint is saved per sub-batch so nothing is lost.
-          RUN_TIME_BUDGET_SECONDS: "1500"
+          # Per-run cap raised 20000 -> 400000: 20000 blocks is ~2.8h of chain time, so
+          # runs that fire every ~4.5h could never catch up. The time budget below is the
+          # real limit now (at ~45 blocks/s a 55-min run can cover ~150k blocks).
+          MAX_BLOCKS_PER_RUN: "400000"
+          # Stop starting new sub-batches after 55 min (job timeout is 75). The checkpoint
+          # is saved per sub-batch, so nothing is lost.
+          RUN_TIME_BUDGET_SECONDS: "3300"
+          # After catching up, keep polling for new blocks until the budget ends, so the
+          # data stays seconds-fresh instead of going stale until the next run starts.
+          FOLLOW_TIP: "true"
+          TIP_POLL_SECONDS: "10"
         run: python worker.py

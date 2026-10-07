@@ -175,7 +175,8 @@ DEFAULT_START_BLOCK = int(os.environ.get("START_BLOCK", "0"))
 # run) while making real progress against a multi-hour gap. Revisit once
 # an external trigger (see AGENTS.md/HANDOFF.md) makes GitHub's scheduler
 # unnecessary and the backlog is actually caught up.
-# 2026-10-04: raised 3000 -> 20000. Work per run is now bounded by
+# 2026-10-07: workflow now sets this to 400000 - at 20000 (~2.8h of chain time) a run
+# could never keep up with runs that fire hours apart. Was: 2026-10-04: raised 3000 -> 20000. Work per run is now bounded by
 # rollup.RUN_TIME_BUDGET_SECONDS (checkpoint is saved every BATCH_BLOCKS blocks),
 # so this cap no longer needs to protect against losing a whole run.
 MAX_BLOCKS_PER_RUN = int(os.environ.get("MAX_BLOCKS_PER_RUN", "20000"))
@@ -597,7 +598,9 @@ def run():
     last_synced = get_last_synced_block(client, DEFAULT_START_BLOCK)
     latest_block = _block_number_on_pool(pool, sticky)
 
-    if last_synced >= latest_block:
+    from rollup import FOLLOW_TIP  # noqa: E402  (lazy: rollup imports this module)
+
+    if last_synced >= latest_block and not FOLLOW_TIP:
         print(f"Already synced through block {last_synced}, chain tip is {latest_block}. Nothing to do.")
         return
 
@@ -607,6 +610,7 @@ def run():
     summary = run_rollup(
         client, pool, sticky, contract_project_map,
         last_synced=last_synced, latest_block=latest_block, max_blocks=MAX_BLOCKS_PER_RUN,
+        tip_fn=lambda: _block_number_on_pool(pool, sticky),
     )
     run_maintenance(client)
     print(f"Done. {summary['blocks']} blocks in {summary['batches']} atomic batches, "

@@ -71,6 +71,14 @@ BATCH_BLOCKS = int(os.environ.get("BATCH_BLOCKS", "500"))
 # least one). Checkpoint is saved per sub-batch, so stopping here loses nothing.
 RUN_TIME_BUDGET_SECONDS = float(os.environ.get("RUN_TIME_BUDGET_SECONDS", "1500"))
 
+# Follow-the-tip mode (2026-10-07). GitHub's scheduled trigger is best effort: a `*/5`
+# cron was observed firing only every 3-5 HOURS, so a run that exits once it reaches
+# the tip leaves the data hours stale (measured: lag grew 21h -> 32h). With this on, a
+# run that catches up keeps polling for new blocks until RUN_TIME_BUDGET_SECONDS ends,
+# so data stays seconds-fresh for the whole job and the next job simply continues.
+FOLLOW_TIP = os.environ.get("FOLLOW_TIP", "true").strip().lower() in ("1", "true", "yes")
+TIP_POLL_SECONDS = float(os.environ.get("TIP_POLL_SECONDS", "10"))
+
 
 class RpcResultError(Exception):
     """An endpoint answered, but with a JSON-RPC error or a null result."""
@@ -262,18 +270,43 @@ def apply_batch(client, start_block: int, end_block: int, acc: BatchAccumulator)
 
 
 def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_map: dict,
-               last_synced: int, latest_block: int, max_blocks: int) -> dict:
-    """Process (last_synced, min(latest, last_synced+max_blocks)] in atomic sub-batches."""
+               last_synced: int, latest_block: int, max_blocks: int, tip_fn=None) -> dict:
+    """
+    Process blocks after `last_synced` in atomic sub-batches, never more than
+    `max_blocks` blocks in total this run.
+
+    Once it reaches the chain tip: with FOLLOW_TIP and a `tip_fn` (callable returning
+    the current chain tip) it keeps polling every TIP_POLL_SECONDS and applying new
+    blocks until RUN_TIME_BUDGET_SECONDS is used up; otherwise it stops. The
+    checkpoint is advanced per sub-batch, so stopping at any point loses nothing.
+    """
     t0 = time.monotonic()
-    end_block = min(latest_block, last_synced + max_blocks)
+    cap = last_synced + max_blocks
+    end_block = min(latest_block, cap)
     tracked = set(contract_project_map)
     cursor = last_synced + 1
     blocks_done = 0
     batches = 0
-    while cursor <= end_block:
-        if batches > 0 and time.monotonic() - t0 > RUN_TIME_BUDGET_SECONDS:
+    while True:
+        over_budget = time.monotonic() - t0 > RUN_TIME_BUDGET_SECONDS
+
+        if cursor > end_block:
+            # Caught up with what we knew about. Follow the tip, or finish.
+            if over_budget or not FOLLOW_TIP or tip_fn is None or cursor > cap:
+                break
+            time.sleep(TIP_POLL_SECONDS)
+            try:
+                latest_block = tip_fn()
+            except Exception as exc:  # transient RPC trouble: retry on the next poll
+                print(f"tip poll failed (will retry): {exc}", file=sys.stderr)
+                continue
+            end_block = min(latest_block, cap)
+            continue
+
+        if over_budget and batches > 0:
             print(f"Time budget ({RUN_TIME_BUDGET_SECONDS:.0f}s) reached; stopping cleanly at {cursor - 1}.")
             break
+
         batch_end = min(cursor + BATCH_BLOCKS - 1, end_block)
         acc = process_batch(pool, sticky, list(range(cursor, batch_end + 1)), tracked)
         if acc.missing_from:
@@ -282,7 +315,7 @@ def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_
         apply_batch(client, cursor, batch_end, acc)
         blocks_done += batch_end - cursor + 1
         batches += 1
-        elapsed = time.monotonic() - t0
+        elapsed = max(time.monotonic() - t0, 1e-9)
         print(f"Applied blocks {cursor}..{batch_end} ({blocks_done} total, "
               f"{blocks_done / elapsed:.1f} blocks/s, lag {latest_block - batch_end}).")
         cursor = batch_end + 1
