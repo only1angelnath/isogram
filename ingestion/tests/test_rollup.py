@@ -400,3 +400,37 @@ def test_follow_mode_always_terminates_even_if_tip_never_works(monkeypatch):
         raise RuntimeError("down")
     out = run_rollup(_FakeClient(), [object()], _StickyPoolIndex(), {}, 0, 100, 10_000, tip_fn=tip)
     assert out["checkpoint"] == 100 and clock.t > 60
+
+
+# ------------------------------------------------------------ historical backfill
+
+def test_address_min_day_skips_old_days_but_keeps_all_totals():
+    old_ts, new_ts = TS, TS + 5 * 86_400
+    acc = BatchAccumulator({CONTRACT}, address_min_day="2026-09-24")
+    acc.add_block(old_ts, [receipt(frm=SENDER_A)])     # 2026-09-21: before the window
+    acc.add_block(new_ts, [receipt(frm=SENDER_B)])     # 2026-09-26: inside the window
+    assert sorted(acc.addresses) == ["2026-09-26"] and acc.addresses["2026-09-26"] == {"bb" * 20}
+    assert sorted(acc.contract_users) == ["2026-09-26"]
+    # everything that is NOT a sender address still counts for both days
+    assert sorted(acc.network) == ["2026-09-21", "2026-09-26"]
+    assert acc.network["2026-09-21"]["tx_count"] == 1 and acc.contracts[("2026-09-21", CONTRACT)][0] == 1
+
+
+def test_backfill_uses_its_own_rpc_and_no_freshness_timestamp(monkeypatch):
+    monkeypatch.setattr(rollup, "fetch_block", lambda pool, sticky, n: (n, TS + n, [receipt()]))
+    monkeypatch.setattr(rollup, "BATCH_BLOCKS", 100)
+    client = _FakeClient()
+    out = run_rollup(client, [object()], _StickyPoolIndex(), {}, last_synced=999, latest_block=1250,
+                     max_blocks=251, tip_fn=None, apply_fn=rollup.apply_backfill)
+    assert {fn for fn, _ in client.calls} == {"apply_backfill_batch"}
+    assert [(p["p_start_block"], p["p_end_block"]) for _, p in client.calls] == [(1000, 1099), (1100, 1199), (1200, 1250)]
+    assert all("p_end_block_ts" not in p for _, p in client.calls)   # historical data must not move "data_through"
+    assert out["checkpoint"] == 1250
+
+
+def test_live_path_still_uses_apply_ingest_batch(monkeypatch):
+    monkeypatch.setattr(rollup, "fetch_block", lambda pool, sticky, n: (n, TS + n, [receipt()]))
+    monkeypatch.setattr(rollup, "BATCH_BLOCKS", 100)
+    client = _FakeClient()
+    run_rollup(client, [object()], _StickyPoolIndex(), {}, 0, 100, 100)
+    assert {fn for fn, _ in client.calls} == {"apply_ingest_batch"}

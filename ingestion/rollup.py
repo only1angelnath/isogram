@@ -132,8 +132,12 @@ class BatchAccumulator:
     Order-independent (sums and sets), so blocks may be added as they finish.
     """
 
-    def __init__(self, tracked_contracts: set):
+    def __init__(self, tracked_contracts: set, address_min_day: str = None):
         self.tracked = {c.lower() for c in tracked_contracts}
+        # Historical backfill only: don't record sender addresses for days older than this
+        # (YYYY-MM-DD). Address tables are pruned to a short window, so older days' addresses
+        # would be deleted again anyway; counts for those days stay "unknown" (null).
+        self.address_min_day = address_min_day
         self.contracts = {}       # (day, to) -> [tx, failed, Decimal gas]
         self.network = {}         # day -> dict of totals
         self.tokens = {}          # (day, token) -> [count, Decimal volume]
@@ -181,10 +185,11 @@ class BatchAccumulator:
 
             sender = (r.get("from") or "").lower()
             if sender.startswith("0x") and len(sender) == 42:
-                sender_hex = sender[2:]
-                self.addresses.setdefault(day, set()).add(sender_hex)
-                if to_l in self.tracked:
-                    self.contract_users.setdefault(day, {}).setdefault(to_l, set()).add(sender_hex)
+                if self.address_min_day is None or day >= self.address_min_day:
+                    sender_hex = sender[2:]
+                    self.addresses.setdefault(day, set()).add(sender_hex)
+                    if to_l in self.tracked:
+                        self.contract_users.setdefault(day, {}).setdefault(to_l, set()).add(sender_hex)
             else:
                 self.missing_from += 1
 
@@ -243,9 +248,9 @@ class BatchAccumulator:
 
 
 def process_batch(pool: list, sticky: "_StickyPoolIndex", block_numbers: list, tracked: set,
-                  concurrency: int = None) -> BatchAccumulator:
+                  concurrency: int = None, address_min_day: str = None) -> BatchAccumulator:
     """Fetch blocks concurrently and aggregate them. Any failure aborts the whole batch."""
-    acc = BatchAccumulator(tracked)
+    acc = BatchAccumulator(tracked, address_min_day=address_min_day)
     workers = concurrency or RPC_CONCURRENCY
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -269,8 +274,15 @@ def apply_batch(client, start_block: int, end_block: int, acc: BatchAccumulator)
     client.rpc("apply_ingest_batch", params).execute()
 
 
+def apply_backfill(client, start_block: int, end_block: int, acc: BatchAccumulator) -> None:
+    """Atomically apply a HISTORICAL batch against historical_backfill_state (not sync_state)."""
+    params = {"p_start_block": start_block, "p_end_block": end_block, **acc.to_payload()}
+    client.rpc("apply_backfill_batch", params).execute()
+
+
 def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_map: dict,
-               last_synced: int, latest_block: int, max_blocks: int, tip_fn=None) -> dict:
+               last_synced: int, latest_block: int, max_blocks: int, tip_fn=None,
+               apply_fn=None, address_min_day: str = None) -> dict:
     """
     Process blocks after `last_synced` in atomic sub-batches, never more than
     `max_blocks` blocks in total this run.
@@ -280,6 +292,7 @@ def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_
     blocks until RUN_TIME_BUDGET_SECONDS is used up; otherwise it stops. The
     checkpoint is advanced per sub-batch, so stopping at any point loses nothing.
     """
+    apply_fn = apply_fn or apply_batch
     t0 = time.monotonic()
     cap = last_synced + max_blocks
     end_block = min(latest_block, cap)
@@ -308,11 +321,12 @@ def run_rollup(client, pool: list, sticky: "_StickyPoolIndex", contract_project_
             break
 
         batch_end = min(cursor + BATCH_BLOCKS - 1, end_block)
-        acc = process_batch(pool, sticky, list(range(cursor, batch_end + 1)), tracked)
+        acc = process_batch(pool, sticky, list(range(cursor, batch_end + 1)), tracked,
+                            address_min_day=address_min_day)
         if acc.missing_from:
             print(f"WARNING: {acc.missing_from} receipts had no usable 'from' in blocks {cursor}..{batch_end}",
                   file=sys.stderr)
-        apply_batch(client, cursor, batch_end, acc)
+        apply_fn(client, cursor, batch_end, acc)
         blocks_done += batch_end - cursor + 1
         batches += 1
         elapsed = max(time.monotonic() - t0, 1e-9)

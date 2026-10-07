@@ -1,0 +1,60 @@
+name: Gap backfill (rollups)
+
+# One-off: fills 2026-09-29 .. 2026-10-03 (blocks 23,225,710 .. 24,297,839), the hole left
+# when the live checkpoint was jumped on 2026-10-04. Run ops/start_gap_backfill.sql FIRST
+# (it points historical_backfill_state at the range). Manual start only; the job re-dispatches
+# itself until the range is complete, then stops on its own. Uses its OWN checkpoint
+# (apply_backfill_batch), so it can run alongside live ingestion.
+#
+# NOTE: the older backfill.yml / backfill_historical.py wrote raw per-transaction rows, which
+# no longer exist (storage) - do not run that one.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: backfill-rollup
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: ingestion
+        run: pip install -r requirements.txt
+
+      - name: Run gap backfill
+        id: backfill
+        working-directory: ingestion
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ARC_RPC_URL: ${{ secrets.ARC_RPC_URL }}
+          ALCHEMY_ARC_RPC_URL: ${{ secrets.ALCHEMY_ARC_RPC_URL }}
+          DRPC_ARC_RPC_URL: ${{ secrets.DRPC_ARC_RPC_URL }}
+          BLOCKDAEMON_ARC_RPC_URL: ${{ secrets.BLOCKDAEMON_ARC_RPC_URL }}
+          BLOCKDAEMON_API_KEY: ${{ secrets.BLOCKDAEMON_API_KEY }}
+          QUICKNODE_ARC_RPC_URL: ${{ secrets.QUICKNODE_ARC_RPC_URL }}
+          # Same tuning as live ingestion (~138 blocks/s measured with these values).
+          RPC_CONCURRENCY: "4"
+          BATCH_BLOCKS: "500"
+          RUN_TIME_BUDGET_SECONDS: "3300"
+        run: python backfill_rollup.py
+
+      # Chain until the range is complete (the script writes done=true when it is).
+      - name: Chain the next run
+        if: success() && steps.backfill.outputs.done != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run backfill-rollup.yml --ref "${{ github.ref_name }}"
