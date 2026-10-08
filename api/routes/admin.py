@@ -15,12 +15,10 @@ though they're now reachable from a UI instead of only the CLI.
 Every route requires the X-Admin-Key header (see admin_auth.py).
 """
 
-import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
-import ratelimit
 from admin_auth import verify_admin_key
 from db import get_write_client
 from models import AdminClassifyRequest, AdminReviewRequest, SubmissionResponse
@@ -148,23 +146,3 @@ def review(submission_id: int, body: AdminReviewRequest, client=Depends(get_writ
 
     return {"status": "ok", "submission_id": submission_id, "decision": body.decision}
 
-
-
-# TEMPORARY (2026-10-08): diagnoses why POST /submit's limiter did not trip on
-# Render (6 requests, no 429). Shows what the app actually sees per request:
-# worker pid (several pids = several processes, each with its own counters),
-# the proxy header chain, and which keys the limiter has recorded.
-# Admin-gated like every /admin route. REMOVE once the cause is fixed.
-@router.get("/_debug/client")
-def debug_client(request: Request):
-    h = request.headers.get
-    return {
-        "pid": os.getpid(),
-        "peer": request.client.host if request.client else None,
-        "x_forwarded_for": h("x-forwarded-for"),
-        "x_real_ip": h("x-real-ip"),
-        "cf_connecting_ip": h("cf-connecting-ip"),
-        "true_client_ip": h("true-client-ip"),
-        "computed_ip": ratelimit.client_ip(request),
-        "limiter_keys": {k: len(q) for k, q in ratelimit.submit_per_ip._hits.items()},
-    }

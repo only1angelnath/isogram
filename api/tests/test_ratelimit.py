@@ -101,6 +101,23 @@ def test_client_ip_falls_back_to_socket_peer(monkeypatch):
     assert ratelimit.client_ip(_Req("1.2.3.4", host="7.7.7.7")) == "7.7.7.7"
 
 
+def test_warns_once_when_key_is_an_internal_address(monkeypatch, caplog):
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+    monkeypatch.setattr(ratelimit, "_warned_internal", False)
+    with caplog.at_level("WARNING", logger="isogram.ratelimit"):
+        ratelimit.client_ip(_Req("1.2.3.4, 10.31.84.88"))
+        ratelimit.client_ip(_Req("1.2.3.4, 10.27.194.106"))
+    assert len([r for r in caplog.records if "TRUSTED_PROXY_HOPS" in r.message]) == 1
+
+
+def test_no_warning_for_a_public_address(monkeypatch, caplog):
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "3")
+    monkeypatch.setattr(ratelimit, "_warned_internal", False)
+    with caplog.at_level("WARNING", logger="isogram.ratelimit"):
+        assert ratelimit.client_ip(_Req("6.6.6.6, 105.127.11.4, 172.71.146.149, 10.31.84.88")) == "105.127.11.4"
+    assert not caplog.records
+
+
 # ---- /submit wiring --------------------------------------------------------
 
 @pytest.fixture(autouse=True)

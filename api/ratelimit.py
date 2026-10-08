@@ -17,15 +17,22 @@ Client IP: X-Forwarded-For is client-controlled at its LEFT end (a caller can
 send their own value and the proxy appends the real address after it). So we
 read from the RIGHT, skipping TRUSTED_PROXY_HOPS entries added by our own
 infrastructure (default 1 = Render's load balancer). A spoofed prefix is
-therefore ignored. If Render's chain turns out to be longer, every visitor
-would share one bucket (too strict, never too loose) — raise
-TRUSTED_PROXY_HOPS after checking.
+therefore ignored.
+
+On Render the chain is "client, Cloudflare edge, Render load balancer", so
+production sets TRUSTED_PROXY_HOPS=3 (verified 2026-10-08; with the default of
+1 the key was the load balancer's internal 10.x address, which rotates across
+nodes, so counts were split and the limit never tripped). If that chain ever
+changes, client_ip() logs a one-time warning when the key looks like an
+internal address.
 
 Config (env, all optional):
   SUBMIT_LIMIT_PER_IP, SUBMIT_LIMIT_GLOBAL, SUBMIT_LIMIT_WINDOW_SECONDS,
   TRUSTED_PROXY_HOPS
 """
 
+import ipaddress
+import logging
 import math
 import os
 import threading
@@ -33,6 +40,9 @@ import time
 from collections import deque
 
 from fastapi import HTTPException, Request
+
+_log = logging.getLogger("isogram.ratelimit")
+_warned_internal = False
 
 
 def _int_env(name: str, default: int) -> int:
@@ -101,13 +111,34 @@ def reset_all() -> None:
     submit_global.reset()
 
 
+def _warn_if_internal(ip: str) -> None:
+    """One-time warning when the limiter key is a private address — the sign
+    that TRUSTED_PROXY_HOPS no longer matches the proxy chain."""
+    global _warned_internal
+    if _warned_internal:
+        return
+    try:
+        internal = ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return
+    if internal:
+        _warned_internal = True
+        _log.warning(
+            "Rate-limit key %s is a private/internal address; check TRUSTED_PROXY_HOPS "
+            "(it should resolve to the real client IP).", ip,
+        )
+
+
 def client_ip(request: Request) -> str:
     """Best-effort real client address; see module docstring for the trust model."""
     hops = _int_env("TRUSTED_PROXY_HOPS", 1)
     parts = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
     if hops > 0 and len(parts) >= hops:
-        return parts[-hops]
-    return request.client.host if request.client else "unknown"
+        ip = parts[-hops]
+    else:
+        ip = request.client.host if request.client else "unknown"
+    _warn_if_internal(ip)
+    return ip
 
 
 def limit_submissions(request: Request) -> None:
