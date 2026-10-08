@@ -11,6 +11,7 @@ export function Nav() {
           Isogram
         </Link>
         <nav className="nav-links">
+          <Link href="/network">Network</Link>
           <Link href="/projects">Projects</Link>
           <Link href="/gas">Gas leaderboard</Link>
         </nav>

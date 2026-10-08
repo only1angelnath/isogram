@@ -10,7 +10,17 @@
 // <img src> for badge embeds (components/ScoreBadge.tsx) — no client-side
 // fetch of it ever happens.
 
-import { NetworkStats, ProjectDetail, ProjectSummary } from "./types";
+import {
+  NetworkDay,
+  NetworkStats,
+  PipelineStatus,
+  ProjectDay,
+  ProjectDetail,
+  ProjectSummary,
+  ScorePoint,
+  TokenDay,
+  TopContract,
+} from "./types";
 
 function getApiBaseUrl(): string {
   const url = process.env.API_BASE_URL;
@@ -55,6 +65,43 @@ export async function getGasLeaderboard(limit = 25): Promise<ProjectSummary[]> {
 
 export async function getNetworkStats(): Promise<NetworkStats | null> {
   return getJson<NetworkStats>("/stats");
+}
+
+// --- Metrics layer ---------------------------------------------------------------
+// These ENRICH pages that already work without them, so a failure (API mid-deploy,
+// a new endpoint not live yet) degrades to "no data" instead of taking the page down.
+
+async function getOptional<T>(path: string): Promise<T | null> {
+  try {
+    return await getJson<T>(path);
+  } catch {
+    return null;
+  }
+}
+
+export function getPipelineStatus(): Promise<PipelineStatus | null> {
+  return getOptional<PipelineStatus>("/metrics/status");
+}
+
+export async function getNetworkDaily(days = 14): Promise<NetworkDay[]> {
+  return (await getOptional<NetworkDay[]>(`/metrics/network/daily?days=${days}`)) ?? [];
+}
+
+export async function getTokensDaily(days = 14, token?: string): Promise<TokenDay[]> {
+  const qs = `days=${days}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+  return (await getOptional<TokenDay[]>(`/metrics/tokens/daily?${qs}`)) ?? [];
+}
+
+export async function getTopContracts(days = 7, limit = 15): Promise<TopContract[]> {
+  return (await getOptional<TopContract[]>(`/metrics/contracts/top?days=${days}&limit=${limit}`)) ?? [];
+}
+
+export async function getProjectDaily(projectId: string, days = 14): Promise<ProjectDay[]> {
+  return (await getOptional<ProjectDay[]>(`/projects/${encodeURIComponent(projectId)}/daily?days=${days}`)) ?? [];
+}
+
+export async function getScoreHistory(projectId: string, limit = 60): Promise<ScorePoint[]> {
+  return (await getOptional<ScorePoint[]>(`/scores/${encodeURIComponent(projectId)}/history?limit=${limit}`)) ?? [];
 }
 
 export function getApiBaseUrlForBadge(): string {

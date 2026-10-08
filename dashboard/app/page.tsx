@@ -1,24 +1,36 @@
 import Link from "next/link";
-import { listProjects, getNetworkStats } from "@/lib/api";
-import { ProjectTable } from "@/components/ProjectTable";
-import { ScoreGauge } from "@/components/ScoreGauge";
-import { formatCount, formatUsd } from "@/lib/format";
+import { getNetworkDaily, getNetworkStats, getPipelineStatus, getTokensDaily, listProjects } from "@/lib/api";
+import { SegmentTable } from "@/components/SegmentTable";
+import { Sparkline } from "@/components/Sparkline";
+import { StatusPill } from "@/components/StatusPill";
+import { formatCompact, formatUsdCompact } from "@/lib/format";
+import { fillCalendar } from "@/lib/series";
+import { rankProjects, segmentConfig, sumGas } from "@/lib/segments";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [projects, stats] = await Promise.all([listProjects(), getNetworkStats()]);
+  const [projects, stats, days, usdcDays, status] = await Promise.all([
+    listProjects(),
+    getNetworkStats(),
+    getNetworkDaily(8),
+    getTokensDaily(8, "USDC"),
+    getPipelineStatus(),
+  ]);
+  const usdcByDay = new Map(usdcDays.map((t) => [t.day, t.volume]));
+  const lastPartial = days.length > 0 && days[days.length - 1].partial;
+  const series = (pick: (d: (typeof days)[number]) => number | null) =>
+    fillCalendar(days, (d) => ({ value: pick(d), partial: d.partial })).map((p) => p.value);
+  const networkGas = sumGas(days);
 
-  const topProjects = [...projects]
-    .filter((p) => p.score !== null)
-    .sort((a, b) => (b.score as number) - (a.score as number))
-    .slice(0, 5);
+  const defi = segmentConfig("defi");
+  const topProjects = rankProjects(projects.filter((p) => p.segment === "defi"), defi.sortBy, networkGas).slice(0, 6);
 
   return (
     <main>
-      {/* Hero — the chart panel is decorative motion only (no fabricated
-          data points), per product decision; every number on this page
-          comes from the API. */}
+      {/* Hero — both charts plot REAL daily series from /metrics (null days break
+          the line; a partial last day is dashed); the status pill is driven by
+          /metrics/status instead of an unconditional LIVE label. */}
       <div className="container hero">
         <div>
           <h1>
@@ -41,52 +53,41 @@ export default async function HomePage() {
 
         <div className="chart-panel">
           <div className="cap">
-            <span className="live">
-              <span className="live-dot" /> ARC MAINNET · LIVE
-            </span>
+            <StatusPill status={status} />
           </div>
           <div className="mini-metrics">
             <div className="mini">
               <div className="mini-label">
-                Arc gas paid <span>USDC, network-wide (7d)</span>
+                Arc gas paid <span>USDC per day, network-wide</span>
               </div>
-              <svg viewBox="0 0 160 50" width="100%" height="50">
-                <path
-                  className="chart-line"
-                  d="M0 46 C 24 40, 40 16, 61 24 C 82 32, 104 11, 160 16"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="1.5"
-                />
-                <circle className="flow-dot a" r="2.5" />
-              </svg>
+              <Sparkline
+                values={series((d) => d.usdc_gas_paid)}
+                lastPartial={lastPartial}
+                color="var(--accent)"
+                ariaLabel="USDC gas paid per day on Arc"
+              />
             </div>
             <div className="mini">
               <div className="mini-label">
-                Arc volume <span>USD, network-wide (7d)</span>
+                USDC movement <span>per day, network-wide</span>
               </div>
-              <svg viewBox="0 0 160 50" width="100%" height="50">
-                <path
-                  className="chart-line b"
-                  d="M0 40 C 18 43, 30 48, 45 37 C 61 27, 72 13, 88 21 C 104 29, 114 45, 130 32 C 141 24, 149 11, 160 8"
-                  fill="none"
-                  stroke="var(--data-2)"
-                  strokeWidth="1.5"
-                />
-                <circle className="flow-dot b" r="2.5" />
-              </svg>
+              <Sparkline
+                values={series((d) => usdcByDay.get(d.day) ?? null)}
+                lastPartial={lastPartial}
+                color="var(--data-2)"
+                ariaLabel="USDC movement per day on Arc"
+              />
             </div>
-            {/* Third mini-metric, per mockups/landing-page.html — was
-                missing entirely before. Real network-average score, same
-                0-1 scale as every other score display in the app (badge,
-                project detail gauge) — the mockup's placeholder showed "82"
-                (0-100 scale) but we keep one consistent scale everywhere
-                rather than rescaling just for this one spot. */}
-            <div className="mini radial-mini">
+            <div className="mini">
               <div className="mini-label">
-                Arc native score <span>network average, live</span>
+                Active addresses <span>distinct senders per day</span>
               </div>
-              <ScoreGauge score={stats?.avg_score ?? null} size={64} />
+              <Sparkline
+                values={series((d) => d.active_addresses)}
+                lastPartial={lastPartial}
+                color="#f2f0ea"
+                ariaLabel="Active addresses per day on Arc"
+              />
             </div>
           </div>
         </div>
@@ -98,24 +99,29 @@ export default async function HomePage() {
       <div className="container">
         <div className="stat-strip">
           <Stat big={String(stats?.total_projects ?? projects.length)} lbl="projects tracked" />
-          <Stat big={formatUsd(stats?.total_tvl_usd ?? null)} lbl="total tvl" />
-          <Stat big={formatUsd(stats?.total_volume_7d ?? null)} lbl="volume (7d)" />
-          <Stat big={formatCount(stats?.total_tx_7d ?? null)} lbl="transactions (7d)" />
-          <Stat big={formatCount(stats?.total_unique_users_7d ?? null)} lbl="unique users (7d)" />
+          <Stat big={formatUsdCompact(stats?.total_tvl_usd ?? null)} lbl="total value locked" />
+          <Stat big={formatUsdCompact(stats?.total_volume_7d ?? null)} lbl="usdc/usyc moved (7d)" />
+          <Stat big={formatCompact(stats?.total_tx_7d ?? null)} lbl="transactions (7d)" />
+          <Stat big={formatCompact(stats?.total_unique_users_7d ?? null)} lbl="unique users (7d)" />
         </div>
+        <p className="pt-note">
+          Movement is gross (every transfer, including hops through contracts). Windows fill as
+          days of data accrue — see <Link href="/network">Network</Link> for the daily detail.
+        </p>
       </div>
 
-      {/* Live preview — top scored projects, links to the full list */}
+      {/* Live preview — DeFi protocols ranked by TVL; other kinds of project are measured
+          differently and live under /projects (see lib/segments.ts). */}
       <section className="section container">
         <div className="eyebrow">LIVE DATA</div>
-        <h2>Top projects, right now.</h2>
+        <h2>Top DeFi protocols, right now.</h2>
         <p className="lede">
-          Ranked by Arc Native Score — activity, USDC volume, TVL, and
-          contract age, weighted equally and explained in full below.
+          Ranked by value locked. Launchpads, infrastructure and tokens are measured with the
+          metrics that fit them — browse each kind under Projects.
         </p>
-        <ProjectTable projects={topProjects} />
+        <SegmentTable projects={topProjects} config={defi} networkGas={networkGas} />
         <p className="pt-note">
-          <Link href="/projects">View all {projects.length} tracked projects →</Link>
+          <Link href="/projects">Browse all {projects.length} tracked projects by type →</Link>
         </p>
       </section>
 
@@ -149,10 +155,10 @@ export default async function HomePage() {
           </div>
           <div className="pipe">
             <div className="n">03</div>
-            <h3>Score</h3>
+            <h3>Classify</h3>
             <p>
-              A published, explainable formula weighing gas, TVL, and
-              activity against what&apos;s actually live on Arc right now.
+              Every contract is typed — DEX, lending, launchpad, infrastructure,
+              token — and each type is measured with the metrics that fit it.
             </p>
           </div>
         </div>
@@ -164,7 +170,7 @@ export default async function HomePage() {
           <p>
             <b>Isogram is research and ecosystem infrastructure, not a
             trading-signals product.</b> No paid data resale. No financial
-            advice framing. The scoring formula is documented in full,
+            advice framing. Metric definitions are documented in full,
             never a black box — see the methodology in{" "}
             <Link href="https://github.com/only1angelnath/isogram">
               the public repo
@@ -181,9 +187,9 @@ export default async function HomePage() {
 
 function Stat({ big, lbl }: { big: string; lbl: string }) {
   return (
-    <div className="stat">
-      <span className="big mono">{big}</span>
-      <span className="lbl">{lbl}</span>
+    <div className="stat" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, minWidth: 0 }}>
+      <span className="big mono" style={{ fontSize: "clamp(1.25rem, 2.4vw, 1.9rem)", lineHeight: 1.1, whiteSpace: "nowrap" }}>{big}</span>
+      <span className="lbl" style={{ margin: 0 }}>{lbl}</span>
     </div>
   );
 }

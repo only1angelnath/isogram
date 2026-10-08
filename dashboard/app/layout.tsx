@@ -4,6 +4,7 @@ import "./globals.css";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { BackgroundGlow } from "@/components/BackgroundGlow";
+import { IsoStyles } from "@/components/IsoStyles";
 
 // Two type families only, per docs/BRANDING.md §4 — an earlier brand draft
 // used four and it read as inconsistent. Archivo carries body/UI/headlines;
@@ -39,6 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${archivo.variable} ${plexMono.variable}`}>
       <body>
+        <IsoStyles />
         <BackgroundGlow />
         <Nav />
         {children}
