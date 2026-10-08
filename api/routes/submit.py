@@ -9,24 +9,33 @@ ingestion/admin_tools.py. Classification (GeckoTerminal + admin judgment)
 still happens normally; this is a signal, not a bypass.
 
 Basic input hygiene here (lowercase + format check on the address, length
-caps on free text) — real spam/abuse filtering is out of scope for the
-Oct 14 deadline; the review queue is where junk gets caught for now.
+caps on free text and on the socials blob) plus a per-IP and global rate
+limit (ratelimit.py). Anything that gets through still only reaches the
+review queue, where junk is caught by a human.
 """
 
+import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from db import get_write_client, insert_submission
 from models import SubmissionRequest, SubmissionResponse
+from ratelimit import limit_submissions
 
 router = APIRouter(tags=["submit"])
 
 _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _MAX_TEXT_LEN = 500
+_MAX_SOCIALS_JSON_LEN = 2000
 
 
-@router.post("/submit", response_model=SubmissionResponse, status_code=201)
+@router.post(
+    "/submit",
+    response_model=SubmissionResponse,
+    status_code=201,
+    dependencies=[Depends(limit_submissions)],
+)
 def submit_project(body: SubmissionRequest, client=Depends(get_write_client)):
     """Submit a contract address for consideration as a tracked project."""
     if not _ADDRESS_RE.match(body.contract_address):
@@ -46,6 +55,12 @@ def submit_project(body: SubmissionRequest, client=Depends(get_write_client)):
                 detail=f"{field_name} must be under {_MAX_TEXT_LEN} characters",
             )
 
+    if body.socials and len(json.dumps(body.socials)) > _MAX_SOCIALS_JSON_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"socials must be under {_MAX_SOCIALS_JSON_LEN} characters when serialized",
+        )
+
     row = insert_submission(
         client,
         {
@@ -60,3 +75,4 @@ def submit_project(body: SubmissionRequest, client=Depends(get_write_client)):
     if not row:
         raise HTTPException(status_code=500, detail="Submission could not be saved")
     return row
+

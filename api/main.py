@@ -1,9 +1,10 @@
 """
 main.py — FastAPI app entrypoint.
 
-Isogram is a public, read-only data API (see docs/PRD.md, docs/AUDIT.md) —
-every route here is a GET. Dashboard, Telegram bot, and badge embeds are all
-thin clients of this API (docs/ARCHITECTURE.md §3).
+Isogram is a public data API (see docs/PRD.md, docs/AUDIT.md). Every route is
+a read (GET) except two: POST /submit (rate-limited, only ever creates a
+'pending' review row) and the /admin/* routes (gated by X-Admin-Key). The
+dashboard and badge embeds are thin clients of this API.
 
 Run locally:
     uvicorn main:app --reload
@@ -24,11 +25,12 @@ app = FastAPI(
 )
 
 # CORS is deliberately wide open, not a dev-mode leftover: this is a public
-# read-only data API meant to be embedded/fetched from arbitrary frontends
-# (dashboards, README badges, third-party tools) — see docs/PRD.md's
-# "plug-and-play, not siloed" requirement. Every route is GET-only with no
-# write capability (docs/AUDIT.md), so an open CORS policy carries none of
-# the risk it would on an API that accepts writes.
+# data API meant to be embedded/fetched from arbitrary frontends (dashboards,
+# README badges, third-party tools) — see docs/PRD.md's "plug-and-play, not
+# siloed" requirement. The two non-GET surfaces stay safe with open CORS:
+# nothing authenticates via cookies (allow_credentials is off, and /admin
+# needs an X-Admin-Key header a foreign site cannot know), and POST /submit
+# is rate-limited and can only create a pending row for human review.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,11 +47,16 @@ app.include_router(network.router)
 app.include_router(metrics.router)
 app.include_router(submit.router)
 app.include_router(admin.router)
-@app.get("/", response_model=HealthResponse)
+
+
+# HEAD is accepted so uptime monitors that probe with HEAD (the usual
+# default) get a 200 instead of 405 and still wake the Render instance.
+@app.api_route("/", methods=["GET", "HEAD"], response_model=HealthResponse)
 def root():
     return {"status": "ok"}
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 def health():
     return {"status": "ok"}
+
