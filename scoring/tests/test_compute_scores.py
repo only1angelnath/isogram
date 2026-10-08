@@ -39,7 +39,7 @@ def test_index_window_metrics_keeps_exact_decimal_from_text():
 
 
 def test_build_project_metrics_wires_gas_users_tvl_age_and_activity():
-    projects = [{"id": "my-project", "contracts": [CONTRACT_A.upper()],
+    projects = [{"id": "my-project", "contracts": [CONTRACT_A.upper()], "category": "dex",
                  "created_at": (NOW - timedelta(days=15)).isoformat()}]
     wm = index_window_metrics([{"project_id": "my-project", "tx_count": 40, "failed_tx_count": 4,
                                 "usdc_gas": "2.0", "unique_users": 2}])
@@ -52,15 +52,15 @@ def test_build_project_metrics_wires_gas_users_tvl_age_and_activity():
 
 
 def test_project_missing_from_window_is_all_zero_not_missing():
-    projects = [{"id": "quiet", "contracts": [CONTRACT_A], "created_at": NOW.isoformat()}]
+    projects = [{"id": "quiet", "contracts": [CONTRACT_A], "category": "dex", "created_at": NOW.isoformat()}]
     m = build_project_metrics(projects, {}, [], NOW, tvl_fetcher=lambda p, c: Decimal(0))["quiet"]
     assert m["usdc_gas_7d"] == 0 and m["unique_users_7d"] == 0 and m["tvl_usd"] == 0
     assert m["age_bonus"] == 0 and m["tx_count_7d"] == 0 and m["failed_tx_7d"] == 0
 
 
 def test_other_projects_activity_does_not_leak():
-    projects = [{"id": "a", "contracts": [CONTRACT_A], "created_at": NOW.isoformat()},
-                {"id": "b", "contracts": [CONTRACT_B], "created_at": NOW.isoformat()}]
+    projects = [{"id": "a", "contracts": [CONTRACT_A], "category": "dex", "created_at": NOW.isoformat()},
+                {"id": "b", "contracts": [CONTRACT_B], "category": "dex", "created_at": NOW.isoformat()}]
     wm = index_window_metrics([{"project_id": "a", "tx_count": 1, "failed_tx_count": 0,
                                 "usdc_gas": "100", "unique_users": 1}])
     metrics = build_project_metrics(projects, wm, [], NOW, tvl_fetcher=fake_tvl)
@@ -69,9 +69,9 @@ def test_other_projects_activity_does_not_leak():
 
 def test_compute_all_scores_one_row_per_project_with_expected_fields():
     metrics = {
-        "a": {"usdc_gas_7d": Decimal(10), "unique_users_7d": Decimal(2), "tvl_usd": Decimal(100),
+        "a": {"segment": "defi", "usdc_gas_7d": Decimal(10), "unique_users_7d": Decimal(2), "tvl_usd": Decimal(100),
               "age_bonus": Decimal(1), "tx_count_7d": 9, "failed_tx_7d": 1},
-        "b": {"usdc_gas_7d": Decimal(0), "unique_users_7d": Decimal(0), "tvl_usd": Decimal(0),
+        "b": {"segment": "defi", "usdc_gas_7d": Decimal(0), "unique_users_7d": Decimal(0), "tvl_usd": Decimal(0),
               "age_bonus": Decimal(0), "tx_count_7d": 0, "failed_tx_7d": 0},
     }
     rows = {r["project_id"]: r for r in compute_all_scores(metrics, NOW)}
@@ -83,8 +83,8 @@ def test_compute_all_scores_one_row_per_project_with_expected_fields():
 
 
 def test_activity_columns_do_not_change_the_score():
-    base = {"usdc_gas_7d": Decimal(5), "unique_users_7d": Decimal(1), "tvl_usd": Decimal(5), "age_bonus": Decimal(0)}
-    other = {"usdc_gas_7d": Decimal(1), "unique_users_7d": Decimal(1), "tvl_usd": Decimal(1), "age_bonus": Decimal(0)}
+    base = {"segment": "defi", "usdc_gas_7d": Decimal(5), "unique_users_7d": Decimal(1), "tvl_usd": Decimal(5), "age_bonus": Decimal(0)}
+    other = {"segment": "defi", "usdc_gas_7d": Decimal(1), "unique_users_7d": Decimal(1), "tvl_usd": Decimal(1), "age_bonus": Decimal(0)}
     r1 = compute_all_scores({"x": {**base, "tx_count_7d": 1, "failed_tx_7d": 0}, "y": {**other, "tx_count_7d": 1, "failed_tx_7d": 0}}, NOW)
     r2 = compute_all_scores({"x": {**base, "tx_count_7d": 999, "failed_tx_7d": 500}, "y": {**other, "tx_count_7d": 1, "failed_tx_7d": 0}}, NOW)
     assert [r["score"] for r in r1] == [r["score"] for r in r2]
@@ -128,8 +128,8 @@ class _Table:
 
 class _FakeClient:
     def __init__(self):
-        self.projects = [{"id": "a", "contracts": [CONTRACT_A], "created_at": "2026-09-20T00:00:00+00:00"},
-                         {"id": "idle", "contracts": [CONTRACT_B], "created_at": "2026-09-20T00:00:00+00:00"}]
+        self.projects = [{"id": "a", "contracts": [CONTRACT_A], "category": "dex", "created_at": "2026-09-20T00:00:00+00:00"},
+                         {"id": "idle", "contracts": [CONTRACT_B], "category": "dex", "created_at": "2026-09-20T00:00:00+00:00"}]
         self.writes, self.rpcs = [], []
 
     def table(self, name): return _Table(self, name)
@@ -157,3 +157,71 @@ def test_run_reads_only_rollups_and_writes_scores(monkeypatch):
     scores = {r["project_id"]: r for r in client.writes[1][1]}
     assert set(scores) == {"a", "idle"}  # idle project still scored (as zero), not dropped
     assert scores["a"]["tx_count_7d"] == 10 and scores["idle"]["tx_count_7d"] == 0
+
+
+# ------------------------------------------------- ADR-004: score only DeFi peers
+
+def _metrics(segment, gas, users=0, tvl=None, age=Decimal(0)):
+    return {"segment": segment, "usdc_gas_7d": Decimal(gas), "unique_users_7d": Decimal(users),
+            "tvl_usd": None if tvl is None else Decimal(tvl), "age_bonus": age, "tx_count_7d": 1, "failed_tx_7d": 0}
+
+
+def test_non_defi_projects_are_not_scored_and_have_no_tvl_not_zero():
+    metrics = {
+        "dex": _metrics("defi", 10, 5, 100),
+        "memecoin": _metrics("token", 999, 999),
+        "router": _metrics("infra", 500, 50),
+        "factory": _metrics("launchpad", 50, 5),
+        "usdc": _metrics("stablecoin", 5, 5),
+        "mystery": _metrics("other", 1, 1),
+    }
+    rows = {r["project_id"]: r for r in compute_all_scores(metrics, NOW)}
+    assert rows["dex"]["score"] is not None
+    for pid in ("memecoin", "router", "factory", "usdc", "mystery"):
+        assert rows[pid]["score"] is None, pid          # not "0": that would read as "scored, worst"
+        assert rows[pid]["tvl_usd"] is None, pid        # not applicable, not zero
+    assert rows["memecoin"]["usdc_gas_7d"] == "999"      # activity is still reported
+
+
+def test_peer_group_isolation_outsiders_never_move_a_defi_score():
+    defi = {"a": _metrics("defi", 10, 4, 100, Decimal(1)), "b": _metrics("defi", 2, 1, 10, Decimal("0.5"))}
+    alone = {r["project_id"]: r["score"] for r in compute_all_scores(defi, NOW)}
+    crowded = dict(defi, whale_token=_metrics("token", 1_000_000, 1_000_000, 1_000_000),
+                   huge_router=_metrics("infra", 9_999_999, 9_999_999))
+    with_outsiders = {r["project_id"]: r["score"] for r in compute_all_scores(crowded, NOW)}
+    assert with_outsiders["a"] == alone["a"] and with_outsiders["b"] == alone["b"]
+
+
+def test_missing_segment_means_not_scored_never_guessed():
+    m = _metrics("defi", 5)
+    del m["segment"]
+    assert compute_all_scores({"x": m}, NOW)[0]["score"] is None
+
+
+def test_tvl_is_only_fetched_for_defi_projects():
+    calls = []
+    def fetcher(pool, contracts):
+        calls.append(list(contracts)); return Decimal(7)
+    projects = [
+        {"id": "d", "contracts": [CONTRACT_A], "category": "dex", "created_at": NOW.isoformat()},
+        {"id": "t", "contracts": [CONTRACT_B], "category": "meme", "created_at": NOW.isoformat()},
+        {"id": "n", "contracts": [CONTRACT_B], "category": None, "created_at": NOW.isoformat()},
+    ]
+    m = build_project_metrics(projects, {}, [], NOW, tvl_fetcher=fetcher)
+    assert len(calls) == 1                                     # 2 of 3 skipped: 3 eth_calls/contract saved
+    assert m["d"]["tvl_usd"] == Decimal(7) and m["d"]["segment"] == "defi"
+    assert m["t"]["tvl_usd"] is None and m["t"]["segment"] == "token"
+    assert m["n"]["tvl_usd"] is None and m["n"]["segment"] == "other"
+
+
+def test_run_writes_null_score_for_non_defi(monkeypatch):
+    client = _FakeClient()
+    client.projects.append({"id": "memecoin", "contracts": [CONTRACT_A.replace("a", "c")], "category": "meme",
+                            "created_at": "2026-09-20T00:00:00+00:00"})
+    monkeypatch.setattr(compute_scores, "get_client", lambda: client)
+    monkeypatch.setattr(compute_scores, "get_web3_pool", lambda: [object()])
+    monkeypatch.setattr(compute_scores, "fetch_project_tvl_onchain", lambda pool, contracts: Decimal(1))
+    compute_scores.run()
+    scores = {r["project_id"]: r for r in client.writes[1][1]}
+    assert scores["memecoin"]["score"] is None and scores["memecoin"]["tvl_usd"] is None
+    assert scores["a"]["score"] is not None

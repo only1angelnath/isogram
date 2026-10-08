@@ -10,7 +10,7 @@ honest "insufficient data" fallback for a project with no score yet
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
-from aggregate import latest_score_by_project, render_badge_svg
+from aggregate import latest_score_by_project, render_badge_svg, segment_for
 from db import fetch_latest_scores_for_project, fetch_project, get_client
 
 router = APIRouter(prefix="/badge", tags=["badge"])
@@ -26,7 +26,10 @@ def badge_svg(project_id: str, client=Depends(get_client)):
     score_row = latest_score_by_project(scores).get(project_id)
     score_value = float(score_row["score"]) if score_row and score_row.get("score") is not None else None
 
-    svg = render_badge_svg(project["name"], score_value)
+    # Only DeFi protocols are scored (ADR-004): say so, rather than "insufficient data",
+    # which would wrongly suggest a router or a token is merely waiting for data.
+    unscored = None if segment_for(project.get("category")) == "defi" else "not scored"
+    svg = render_badge_svg(project["name"], score_value, unscored_label=unscored)
     return Response(
         content=svg,
         media_type="image/svg+xml",

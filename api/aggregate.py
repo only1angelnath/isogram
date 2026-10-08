@@ -10,11 +10,13 @@ docs/SCHEMA.md) — everything here works from "the latest row per project,"
 never an average or a sum across runs.
 """
 
+import html
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-# Category -> segment. A segment decides which metrics make sense for a project
+# Category -> segment. MUST match scoring/segments.py (tests/test_segments_sync.py in scoring/
+# fails on drift). A segment decides which metrics make sense for a project
 # (DeFiLlama-style): TVL means something for a DEX or lender, nothing for a router
 # proxy or a memecoin; the composite score only makes sense inside a peer group of
 # comparable DeFi protocols. Unknown / missing category -> "other" (never guessed).
@@ -165,22 +167,28 @@ def build_network_summary(projects: list[dict], score_rows: list[dict], network_
     }
 
 
-def render_badge_svg(project_name: str, score: Optional[float]) -> str:
+def render_badge_svg(project_name: str, score: Optional[float], unscored_label: Optional[str] = None) -> str:
     """
-    Render a minimal shields.io-style SVG badge. Falls back to an honest
-    "insufficient data" label rather than a fabricated 0.0-looking score
-    when a project has no computed score yet (docs/AUDIT.md badge fallback
-    requirement, docs/BUGS.md #3).
+    Render a minimal shields.io-style SVG badge. Falls back to an honest label rather than a
+    fabricated 0.0-looking score when a project has no score: "insufficient data" for a DeFi
+    project not yet scored, or `unscored_label` (e.g. "not scored") for a project type that
+    is never scored (ADR-004).
+
+    The name comes from PUBLIC on-chain token metadata that anyone can set, so every string
+    is XML-escaped: an unescaped "&" breaks the image, and an unescaped "<script>" in an SVG
+    opened directly from the API's own domain would execute.
     """
     label = project_name
-    value = f"{score:.2f}" if score is not None else "insufficient data"
+    value = f"{score:.2f}" if score is not None else (unscored_label or "insufficient data")
     color = "#5FC9C0" if score is not None else "#8f8d86"  # Isogram verdigris / ink-dim
+    esc_label = html.escape(label, quote=True)
+    esc_value = html.escape(value, quote=True)
 
     label_width = 10 + 7 * len(label)
     value_width = 10 + 7 * len(value)
     total_width = label_width + value_width
 
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="20" role="img" aria-label="{label}: {value}">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="20" role="img" aria-label="{esc_label}: {esc_value}">
   <linearGradient id="s" x2="0" y2="100%">
     <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
     <stop offset="1" stop-opacity=".1"/>
@@ -194,8 +202,8 @@ def render_badge_svg(project_name: str, score: Optional[float]) -> str:
     <rect width="{total_width}" height="20" fill="url(#s)"/>
   </g>
   <g fill="#f2f0ea" text-anchor="middle" font-family="Verdana,Geneva,sans-serif" font-size="11">
-    <text x="{label_width / 2}" y="14">{label}</text>
-    <text x="{label_width + value_width / 2}" y="14">{value}</text>
+    <text x="{label_width / 2}" y="14">{esc_label}</text>
+    <text x="{label_width + value_width / 2}" y="14">{esc_value}</text>
   </g>
 </svg>"""
 

@@ -10,8 +10,10 @@ docs/ARCHITECTURE.md §2.4). Each run:
      PostgREST (679s, crashed twice on statement timeouts); per-transaction
      rows no longer exist.
   2. Queries each project's CURRENT on-chain token balances for TVL (tvl.py).
-  3. Normalizes the metrics relative to each other and combines them into one
-     score (scoring.py — formula UNCHANGED, see ADR-002).
+  3. Scores DeFi protocols only, normalised within that peer group (scoring.py - formula
+     UNCHANGED, see ADR-002; scope changed by ADR-004). Launchpads, infrastructure,
+     tokens and stablecoins get score = NULL and no TVL: those measures are not meaningful
+     for them.
   4. Writes network_stats and one project_scores row per project.
 
 Usage:
@@ -36,6 +38,7 @@ from db import (
     upsert_network_stats,
     upsert_project_scores,
 )
+from segments import SCORED_SEGMENTS, TVL_SEGMENTS, segment_for
 from scoring import compute_score, contract_age_bonus
 from tvl import fetch_project_tvl_onchain, get_web3_pool
 
@@ -95,10 +98,16 @@ def build_project_metrics(
 
         created_at = _parse_ts(project["created_at"]) if project.get("created_at") else now
 
+        segment = segment_for(project.get("category"))
+        # TVL is only meaningful (and only fetched - 3 eth_calls per contract) for DeFi.
+        # None = "not applicable", deliberately not 0.
+        tvl = tvl_fetcher(rpc_pool, contracts) if segment in TVL_SEGMENTS else None
+
         metrics[project_id] = {
+            "segment": segment,
             "usdc_gas_7d": wm.get("usdc_gas", Decimal("0")),
             "unique_users_7d": wm.get("unique_users", Decimal("0")),
-            "tvl_usd": tvl_fetcher(rpc_pool, contracts),
+            "tvl_usd": tvl,
             "age_bonus": contract_age_bonus(created_at, now),
             # Reported alongside the score, NOT part of the formula:
             "tx_count_7d": wm.get("tx_count", 0),
@@ -109,29 +118,33 @@ def build_project_metrics(
 
 def compute_all_scores(metrics: dict[str, dict], computed_at: datetime) -> list[dict]:
     """
-    Pure function: given per-project raw metrics, normalize across the whole
-    set and compute each project's final score. Returns project_scores rows
-    ready to insert.
+    Pure function: one project_scores row per project. Only projects in SCORED_SEGMENTS
+    (DeFi) are scored, and they are normalised against each other ONLY - a memecoin or a
+    router never moves a DEX's score. Everything else gets score = None (not applicable),
+    never 0, which would read as "scored and worst".
     """
-    all_gas = [m["usdc_gas_7d"] for m in metrics.values()]
-    all_users = [m["unique_users_7d"] for m in metrics.values()]
-    all_tvl = [m["tvl_usd"] for m in metrics.values()]
+    scored = {pid: m for pid, m in metrics.items() if m.get("segment") in SCORED_SEGMENTS}
+    all_gas = [m["usdc_gas_7d"] for m in scored.values()]
+    all_users = [m["unique_users_7d"] for m in scored.values()]
+    all_tvl = [m["tvl_usd"] or Decimal("0") for m in scored.values()]
 
     rows = []
     for project_id, m in metrics.items():
-        score = compute_score(
-            usdc_gas_7d=m["usdc_gas_7d"],
-            all_usdc_gas_7d=all_gas,
-            unique_users_7d=m["unique_users_7d"],
-            all_unique_users_7d=all_users,
-            tvl_usd=m["tvl_usd"],
-            all_tvl_usd=all_tvl,
-            age_bonus=m["age_bonus"],
-        )
+        score = None
+        if project_id in scored:
+            score = compute_score(
+                usdc_gas_7d=m["usdc_gas_7d"],
+                all_usdc_gas_7d=all_gas,
+                unique_users_7d=m["unique_users_7d"],
+                all_unique_users_7d=all_users,
+                tvl_usd=m["tvl_usd"] or Decimal("0"),
+                all_tvl_usd=all_tvl,
+                age_bonus=m["age_bonus"],
+            )
         rows.append({
             "project_id": project_id,
-            "score": str(score),
-            "tvl_usd": str(m["tvl_usd"]),
+            "score": str(score) if score is not None else None,
+            "tvl_usd": str(m["tvl_usd"]) if m.get("tvl_usd") is not None else None,
             "usdc_gas_7d": str(m["usdc_gas_7d"]),
             "unique_users_7d": int(m["unique_users_7d"]),
             "tx_count_7d": int(m.get("tx_count_7d", 0)),

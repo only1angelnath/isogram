@@ -80,12 +80,12 @@ def _fetch_all_pages_keyset(build_query, cursor_column: str):
 
 def fetch_projects(client: Client) -> list[dict]:
     """
-    All tracked projects: id, contracts, created_at. Keyset-paginated on id
+    All tracked projects: id, contracts, created_at, category. Keyset-paginated on id
     (primary key): discovery now promotes dozens of projects per run, and an
     unpaginated select silently stops at PostgREST's 1000-row cap.
     """
     return _fetch_all_pages_keyset(
-        lambda: client.table("projects").select("id, contracts, created_at"),
+        lambda: client.table("projects").select("id, contracts, created_at, category"),
         cursor_column="id",
     )
 

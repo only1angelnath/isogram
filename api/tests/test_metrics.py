@@ -275,3 +275,29 @@ def test_users_zero_with_transactions_is_not_measured_not_zero():
     idle = aggregate.build_project_summary({"id": "i", "name": "I", "category": "dex"},
                                            {"score": "0", "tx_count_7d": 0, "failed_tx_7d": 0, "unique_users_7d": 0})
     assert idle["unique_users_7d"] == 0
+
+
+# --------------------------------------------------------------- badge safety + ADR-004
+
+def test_badge_escapes_hostile_and_awkward_token_names():
+    evil = aggregate.render_badge_svg('</text><script>alert(1)</script>"x', 0.5)
+    assert "<script>" not in evil and "&lt;script&gt;" in evil
+    amp = aggregate.render_badge_svg("Trump Media & Technology Group C", 0.5)
+    assert "&amp;" in amp and " & " not in amp.replace("&amp;", "")
+    import xml.dom.minidom
+    xml.dom.minidom.parseString(evil)        # still well-formed XML
+    xml.dom.minidom.parseString(amp)
+
+
+def test_badge_unscored_label_for_non_defi_vs_defi_fallback():
+    assert "not scored" in aggregate.render_badge_svg("Mars coin", None, unscored_label="not scored")
+    assert "insufficient data" in aggregate.render_badge_svg("Some DEX", None)
+    assert "0.50" in aggregate.render_badge_svg("Some DEX", 0.5)
+
+
+def test_badge_route_says_not_scored_for_a_token_but_insufficient_data_for_defi(client, monkeypatch):
+    import routes.badge as badge
+    monkeypatch.setattr(badge, "fetch_latest_scores_for_project", lambda c, pid: [])
+    monkeypatch.setattr(badge, "fetch_project", lambda c, pid: {"id": pid, "name": pid, "category": "meme" if pid == "tok" else "dex"})
+    assert "not scored" in client.get("/badge/tok.svg").text
+    assert "insufficient data" in client.get("/badge/dx.svg").text
