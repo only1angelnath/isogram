@@ -107,6 +107,18 @@ def test_market_data_early_stop_is_reported(monkeypatch, capsys):
     assert "stopped early (rate_limited)" in capsys.readouterr().out
 
 
+def test_market_data_summary_mentions_7d_volume_progress_and_failures(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    base = {"targets": 430, "batches": 15, "returned": 300, "upserted": 300, "stopped": None}
+    _fake_market_data(monkeypatch, lambda: dict(base, volume_7d_updated=80, volume_7d_calls=80))
+    worker.main()
+    assert "7d volume refreshed for 80" in capsys.readouterr().out
+    _fake_market_data(monkeypatch, lambda: dict(base, volume_7d_error="RuntimeError: table locked"))
+    worker.main()
+    assert "7d volume pass failed (RuntimeError: table locked)" in capsys.readouterr().out
+
+
 def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):
     ran = []
     monkeypatch.setattr(worker, "run", lambda: (_ for _ in ()).throw(ValueError("rpc exploded")))

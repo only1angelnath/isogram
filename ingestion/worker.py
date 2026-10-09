@@ -664,6 +664,8 @@ def _run_market_data_safely() -> None:
         return
     print(f"Market data: {result['upserted']} of {result['targets']} tokens priced "
           f"in {result['batches']} calls"
+          + (f", 7d volume refreshed for {result['volume_7d_updated']}" if "volume_7d_updated" in result else "")
+          + (f", 7d volume pass failed ({result['volume_7d_error']})" if "volume_7d_error" in result else "")
           + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
 
 
