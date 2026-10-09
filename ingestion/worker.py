@@ -642,6 +642,31 @@ def _run_discovery_safely() -> None:
           f"{result['promoted']} promoted.")
 
 
+def _run_market_data_safely() -> None:
+    """
+    Third-party market data (price/FDV/liquidity) is a nice-to-have, never a reason to
+    fail or delay an ingestion run (see _run_discovery_safely for the 2026-10-07 incident
+    that motivates this). market_data bounds its own time; any error is surfaced as a
+    GitHub ::warning:: and the job result is left alone.
+    """
+    try:
+        from market_data import run_market_data_refresh
+
+        result = run_market_data_refresh()
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning title=Market data refresh failed::{type(exc).__name__}: {exc}")
+        return
+    if "skipped" in result:
+        print(f"Market data: skipped ({result['skipped']})")
+        return
+    print(f"Market data: {result['upserted']} of {result['targets']} tokens priced "
+          f"in {result['batches']} calls"
+          + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
+
+
 def main() -> None:
     start = time.monotonic()
     try:
@@ -652,8 +677,10 @@ def main() -> None:
         _run_discovery_safely()
         raise
     _run_discovery_safely()
+    _run_market_data_safely()
     print(f"Finished in {time.monotonic() - start:.1f}s")
 
 
 if __name__ == "__main__":
     main()
+

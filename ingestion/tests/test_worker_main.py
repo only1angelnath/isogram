@@ -16,6 +16,20 @@ import rollup
 import worker
 
 
+@pytest.fixture(autouse=True)
+def _no_real_market_data(monkeypatch):
+    """worker.main() also runs the market-data refresh; never let these tests reach the network."""
+    mod = types.ModuleType("market_data")
+    mod.run_market_data_refresh = lambda: {"skipped": "stubbed in tests"}
+    monkeypatch.setitem(sys.modules, "market_data", mod)
+
+
+def _fake_market_data(monkeypatch, behaviour):
+    mod = types.ModuleType("market_data")
+    mod.run_market_data_refresh = behaviour
+    monkeypatch.setitem(sys.modules, "market_data", mod)
+
+
 def _fake_discovery(monkeypatch, behaviour):
     mod = types.ModuleType("discovery")
     mod.run_discovery = behaviour
@@ -64,6 +78,45 @@ def test_happy_path_prints_discovery_summary(monkeypatch, capsys):
     assert "Discovery: 3 touched, 1 seeded" in capsys.readouterr().out
 
 
+def test_market_data_crash_after_good_ingestion_does_not_fail_the_job(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    def boom():
+        raise RuntimeError("coingecko exploded")
+    _fake_market_data(monkeypatch, boom)
+    worker.main()                                    # must NOT raise
+    out = capsys.readouterr().out
+    assert "::warning title=Market data refresh failed::RuntimeError" in out and "Finished in" in out
+
+
+def test_market_data_summary_is_printed(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    _fake_market_data(monkeypatch, lambda: {"targets": 430, "batches": 15, "returned": 300,
+                                            "upserted": 300, "stopped": None})
+    worker.main()
+    assert "Market data: 300 of 430 tokens priced in 15 calls." in capsys.readouterr().out
+
+
+def test_market_data_early_stop_is_reported(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    _fake_market_data(monkeypatch, lambda: {"targets": 430, "batches": 3, "returned": 60,
+                                            "upserted": 60, "stopped": "rate_limited"})
+    worker.main()
+    assert "stopped early (rate_limited)" in capsys.readouterr().out
+
+
+def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):
+    ran = []
+    monkeypatch.setattr(worker, "run", lambda: (_ for _ in ()).throw(ValueError("rpc exploded")))
+    _fake_discovery(monkeypatch, lambda: OK)
+    _fake_market_data(monkeypatch, lambda: ran.append(1) or {"skipped": "x"})
+    with pytest.raises(ValueError, match="rpc exploded"):
+        worker.main()
+    assert ran == []
+
+
 # ----------------------------------------------------------------- maintenance
 
 class _Exec:
@@ -98,3 +151,4 @@ def test_maintenance_is_capped_and_never_fatal(monkeypatch):
     assert c.calls.count("prune_rollup_long_tail") == 4          # hard cap
     rollup.run_maintenance(_MaintClient([], fail="prune_rollup_long_tail"))   # must not raise
     rollup.run_maintenance(_MaintClient([{"long_tail_rows_deleted": 0, "more": False}], fail="prune_rollup_addresses"))
+
