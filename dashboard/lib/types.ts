@@ -14,6 +14,8 @@ export interface MarketData {
   market_cap_usd: number | null;
   liquidity_usd: number | null;
   volume_24h_usd: number | null;
+  /** Last 7 UTC days in the token's most liquid pool only (can understate); null = unknown/stale. */
+  volume_7d_usd?: number | null;
   /** ok = trustworthy; thin = under $10k liquidity; inactive = reserves but ~no trading. */
   quality: "ok" | "thin" | "inactive";
   listed_on_coingecko: boolean;

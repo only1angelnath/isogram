@@ -73,7 +73,9 @@ export default async function ProjectsPage({ searchParams }: {
       </p>
       {(cfg.id === "token" || cfg.id === "stablecoin") && (
         <p className="pt-note">
-          Price, FDV and liquidity are third-party data from GeckoTerminal, refreshed hourly. <b>thin</b> means under
+          Price, volume, FDV and liquidity are third-party data from GeckoTerminal, refreshed hourly. <b>24h vol</b> covers
+          all pools; <b>7d vol</b> covers the token&apos;s most liquid pool only, so it can understate tokens that trade in
+          several. <b>thin</b> means under
           $10,000 of liquidity and <b>no trading</b> means under 1% of liquidity traded in the last 24 hours; FDV is
           hidden in both cases. A <b>CoinGecko</b> tag means the token maps to a CoinGecko listing; without it the price
           comes from a DEX pool and is unverified. Not investment advice.

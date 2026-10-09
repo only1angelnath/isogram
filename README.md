@@ -67,7 +67,10 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   indexes a trading pool; about half of tracked tokens have a priced pool, and most of
   those are thin. Each value carries a quality flag: `thin` means under $10,000 of liquidity and
   `inactive` means under 1% of liquidity traded in 24 hours. FDV and market cap are
-  withheld unless quality is `ok`, because they inherit every flaw of the price. Data
+  withheld unless quality is `ok`, because they inherit every flaw of the price. 24h volume
+  covers all pools; 7d volume is the sum of the last 7 UTC days in the token's most liquid
+  pool only, so it can understate tokens that trade in several pools. The Tokens tab is
+  ranked by 24h volume. Data
   older than 24 hours is hidden. A `CoinGecko` tag means the token maps to a CoinGecko
   listing; without it the price comes from a DEX pool and is unverified. Token names are
   chosen by whoever deploys the contract, so a token called "Bitcoin" is not necessarily

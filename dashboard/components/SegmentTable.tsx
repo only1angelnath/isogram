@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ProjectSummary } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
-import { COLUMN_LABELS, ColumnKey, SegmentConfig, metricOf } from "@/lib/segments";
+import { COLUMN_LABELS, COLUMN_TITLES, ColumnKey, SegmentConfig, metricOf } from "@/lib/segments";
 import { Query, SortDir, href } from "@/lib/tableState";
 import { failedTone, formatCount, formatPercent, formatPrice, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
 
@@ -17,7 +17,9 @@ function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): str
     case "score": return formatScore(v);
     case "price": return formatPrice(v);
     case "fdv":
-    case "liquidity": return v === null ? "—" : formatUsdCompact(v);
+    case "liquidity":
+    case "vol24h":
+    case "vol7d": return v === null ? "—" : formatUsdCompact(v);
   }
 }
 
@@ -36,11 +38,11 @@ export interface SortLinks {
 }
 
 function SortTh({ label, colKey, sort }: { label: string; colKey: string; sort?: SortLinks }) {
-  if (!sort) return <th>{label}</th>;
+  if (!sort) return <th title={COLUMN_TITLES[colKey as ColumnKey]}>{label}</th>;
   const active = sort.key === colKey;
   const nextDir: SortDir = active ? (sort.dir === "desc" ? "asc" : "desc") : colKey === "name" ? "asc" : "desc";
   return (
-    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"} title={COLUMN_TITLES[colKey as ColumnKey]}>
       <Link href={href(sort.basePath, { ...sort.query, sort: colKey, dir: nextDir })} className={`iso-sort${active ? " on" : ""}`} prefetch={false}>
         {label}
         <span aria-hidden="true">{active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}</span>

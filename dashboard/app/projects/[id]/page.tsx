@@ -113,6 +113,7 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.fdv_usd)}</div><div className="label">fdv</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.liquidity_usd)}</div><div className="label">liquidity</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.volume_24h_usd)}</div><div className="label">volume (24h)</div></div>
+                <div className="stat-panel" title="Last 7 UTC days in the token's most liquid pool only; can understate tokens that trade in several pools."><div className="value mono">{formatUsdCompact(market.volume_7d_usd ?? null)}</div><div className="label">volume (7d, top pool)</div></div>
               </div>
               {market.quality === "thin" && (
                 <p className="pt-note" style={{ marginBottom: 8 }}>Liquidity is under $10,000, so this price is easy to move and FDV is not shown.</p>

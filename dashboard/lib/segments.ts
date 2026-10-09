@@ -8,7 +8,7 @@
 
 import { ProjectSummary, SegmentId } from "./types";
 
-export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score" | "price" | "fdv" | "liquidity";
+export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score" | "price" | "fdv" | "liquidity" | "vol24h" | "vol7d";
 
 export interface SegmentConfig {
   id: SegmentId;
@@ -57,9 +57,9 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "token",
     label: "Tokens",
     short: "Tokens",
-    blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
-    columns: ["price", "fdv", "liquidity", "tx", "users"],
-    sortBy: "tx",
+    blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, volume, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed; the table is ranked by 24h trading volume. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
+    columns: ["price", "vol24h", "vol7d", "liquidity", "fdv", "tx", "users"],
+    sortBy: "vol24h",
     showsScore: false,
     showsTvl: false,
   },
@@ -100,6 +100,15 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
   price: "price",
   fdv: "fdv",
   liquidity: "liquidity",
+  vol24h: "24h vol",
+  vol7d: "7d vol",
+};
+
+/** Hover text for columns whose basis is not obvious from the label. */
+export const COLUMN_TITLES: Partial<Record<ColumnKey, string>> = {
+  vol24h: "Trading volume in the last 24 hours across all pools (GeckoTerminal, third-party).",
+  vol7d: "Trading volume over the last 7 UTC days, today included, in the token's most liquid pool only - it can understate tokens that trade in several pools (GeckoTerminal, third-party).",
+  fdv: "Fully diluted valuation, shown only when the price is backed by real liquidity and trading.",
 };
 
 /** The value a column shows for a project (null = not measured). */
@@ -114,6 +123,8 @@ export function metricOf(p: ProjectSummary, key: ColumnKey, networkGas: number |
     case "price": return p.market?.price_usd ?? null;
     case "fdv": return p.market?.fdv_usd ?? null;
     case "liquidity": return p.market?.liquidity_usd ?? null;
+    case "vol24h": return p.market?.volume_24h_usd ?? null;
+    case "vol7d": return p.market?.volume_7d_usd ?? null;
     case "share": return networkGas !== null && networkGas > 0 && p.usdc_gas_7d !== null ? p.usdc_gas_7d / networkGas : null;
   }
 }
