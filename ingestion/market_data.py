@@ -55,9 +55,11 @@ def parse_token_rows(payload: dict) -> dict:
         if not address:
             continue
         price = _num(attrs.get("price_usd"))
+        coin_id = attrs.get("coingecko_coin_id")
         rows[address] = {
             "contract_address": address,
             "symbol": attrs.get("symbol"),
+            "coingecko_coin_id": coin_id.strip() if isinstance(coin_id, str) and coin_id.strip() else None,
             "price_usd": price if price else None,
             "fdv_usd": _num(attrs.get("fdv_usd")),
             "market_cap_usd": _num(attrs.get("market_cap_usd")),

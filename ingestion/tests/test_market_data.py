@@ -37,14 +37,24 @@ def test_parse_token_rows_full_row():
     rows = md.parse_token_rows(payload({
         "address": "0xABCDEF" + "0" * 34, "symbol": "USDC", "price_usd": "0.9997",
         "fdv_usd": "5.2e8", "market_cap_usd": None, "total_reserve_in_usd": "14621800.5",
-        "volume_usd": {"h24": "56838400"},
+        "volume_usd": {"h24": "56838400"}, "coingecko_coin_id": " usd-coin ",
     }))
     r = rows["0xabcdef" + "0" * 34]
     assert r == {
-        "contract_address": "0xabcdef" + "0" * 34, "symbol": "USDC", "price_usd": 0.9997,
+        "contract_address": "0xabcdef" + "0" * 34, "symbol": "USDC", "coingecko_coin_id": "usd-coin",
+        "price_usd": 0.9997,
         "fdv_usd": 5.2e8, "market_cap_usd": None, "liquidity_usd": 14621800.5,
         "volume_24h_usd": 56838400.0, "source": "geckoterminal",
     }
+
+
+def test_missing_or_blank_coin_id_is_none():
+    rows = md.parse_token_rows(payload(
+        {"address": addr(1), "price_usd": "1"},
+        {"address": addr(2), "price_usd": "1", "coingecko_coin_id": "  "},
+        {"address": addr(3), "price_usd": "1", "coingecko_coin_id": 123},
+    ))
+    assert all(rows[addr(i)]["coingecko_coin_id"] is None for i in (1, 2, 3))
 
 
 def test_null_price_stays_null_and_zero_price_is_not_stored_as_zero():
