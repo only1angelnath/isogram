@@ -48,6 +48,15 @@ const CSS = `
 .iso-table a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .iso-num { font-family: var(--font-mono), monospace; }
 .iso-dim { color: var(--ink-dim); }
+.iso-table th a.iso-sort { color: inherit; text-decoration: none; white-space: nowrap; }
+.iso-table th a.iso-sort:hover { color: #f2f0ea; text-decoration: none; }
+.iso-table th a.iso-sort.on { color: var(--accent); }
+.iso-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font: 12px var(--font-mono), monospace; }
+.iso-pager-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.iso-pager-links a, .iso-pager-links .off { padding: 6px 11px; border-radius: 999px; border: 1px solid rgba(255,255,255,.13); text-decoration: none; color: var(--ink-dim); }
+.iso-pager-links a:hover { color: #f2f0ea; border-color: rgba(255,255,255,.3); }
+.iso-pager-links a[aria-current="page"] { background: rgba(255,91,46,.14); border-color: rgba(255,91,46,.55); color: #f2f0ea; }
+.iso-pager-links .off { opacity: .4; border-style: dashed; }
 .iso-bartd { background-repeat: no-repeat; background-size: var(--w, 0%) 100%; background-image: linear-gradient(90deg, var(--bar, rgba(255,91,46,.2)), var(--bar, rgba(255,91,46,.2))); }
 .iso-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font: 500 10px var(--font-mono), monospace; letter-spacing: .05em; text-transform: uppercase; border: 1px solid rgba(255,255,255,.16); color: var(--ink-dim); vertical-align: middle; }
 .iso-pill.good { color: #5FC9C0; border-color: rgba(95,201,192,.45); background: rgba(95,201,192,.09); }
@@ -81,3 +90,4 @@ const CSS = `
 export function IsoStyles() {
   return <style dangerouslySetInnerHTML={{ __html: CSS }} />;
 }
+

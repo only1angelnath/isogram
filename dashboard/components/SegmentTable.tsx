@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ProjectSummary } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { COLUMN_LABELS, ColumnKey, SegmentConfig, metricOf } from "@/lib/segments";
+import { Query, SortDir, href } from "@/lib/tableState";
 import { failedTone, formatCount, formatPercent, formatPrice, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
 
 function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): string {
@@ -25,11 +26,35 @@ const QUALITY_NOTE: Record<string, { label: string; title: string }> = {
   inactive: { label: "no trading", title: "Liquidity exists but almost nothing traded in 24h: the price may be stale, so FDV is not shown." },
 };
 
-export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
+/** Where header links point and which column is active; omit for a fixed-order table. */
+export interface SortLinks {
+  basePath: string;
+  /** Everything except sort/dir/page (e.g. the selected segment). */
+  query: Query;
+  key: string;
+  dir: SortDir;
+}
+
+function SortTh({ label, colKey, sort }: { label: string; colKey: string; sort?: SortLinks }) {
+  if (!sort) return <th>{label}</th>;
+  const active = sort.key === colKey;
+  const nextDir: SortDir = active ? (sort.dir === "desc" ? "asc" : "desc") : colKey === "name" ? "asc" : "desc";
+  return (
+    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <Link href={href(sort.basePath, { ...sort.query, sort: colKey, dir: nextDir })} className={`iso-sort${active ? " on" : ""}`} prefetch={false}>
+        {label}
+        <span aria-hidden="true">{active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
+      </Link>
+    </th>
+  );
+}
+
+export function SegmentTable({ projects, config, networkGas, startRank = 1, sort }: {
   projects: ProjectSummary[];
   config: SegmentConfig;
   networkGas: number | null;
   startRank?: number;
+  sort?: SortLinks;
 }) {
   if (projects.length === 0) {
     return <div className="iso-table-wrap"><div className="iso-dim" style={{ padding: 24 }}>Nothing tracked in this group yet.</div></div>;
@@ -43,8 +68,8 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
       <table className="iso-table">
         <thead>
           <tr>
-            <th>project</th>
-            {config.columns.map((k) => <th key={k}>{COLUMN_LABELS[k]}</th>)}
+            <SortTh label="project" colKey="name" sort={sort} />
+            {config.columns.map((k) => <SortTh key={k} label={COLUMN_LABELS[k]} colKey={k} sort={sort} />)}
           </tr>
         </thead>
         <tbody>

@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { getNetworkDaily, listProjects } from "@/lib/api";
 import { SegmentTable } from "@/components/SegmentTable";
+import { Pagination } from "@/components/Pagination";
 import { Avatar } from "@/components/Avatar";
-import { SEGMENTS, SegmentConfig, rankProjects, sumGas } from "@/lib/segments";
+import { ColumnKey, SEGMENTS, SegmentConfig, rankProjects, sortProjects, sumGas } from "@/lib/segments";
+import { paginate, parsePage, parseSort } from "@/lib/tableState";
 import { formatCount, formatPercent, formatUsd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +23,11 @@ const GAS_VIEW: SegmentConfig = {
   showsTvl: false,
 };
 
-export default async function GasLeaderboardPage({ searchParams }: { searchParams: Promise<{ segment?: string }> }) {
-  const { segment } = await searchParams;
+export default async function GasLeaderboardPage({ searchParams }: {
+  searchParams: Promise<{ segment?: string; sort?: string; dir?: string; page?: string }>;
+}) {
+  const sp = await searchParams;
+  const segment = sp.segment;
   const [all, days] = await Promise.all([listProjects(), getNetworkDaily(7)]);
   const networkGas = sumGas(days);
 
@@ -31,7 +36,13 @@ export default async function GasLeaderboardPage({ searchParams }: { searchParam
   const filtered = segment && counts.some((c) => c.s.id === segment) ? payers.filter((p) => (p.segment ?? "other") === segment) : payers;
   const ranked = rankProjects(filtered, "gas", networkGas);
   const podium = ranked.slice(0, 3);
-  const rest = ranked.slice(3, 53);
+  // The podium highlights the top three by gas; the table below lists EVERYONE, sortable and paged.
+  const sortState = parseSort(sp.sort, sp.dir, ["name", ...GAS_VIEW.columns], { key: "gas", dir: "desc" });
+  const sorted = sortProjects(filtered, sortState.key as ColumnKey | "name", sortState.dir, networkGas);
+  const paged = paginate(sorted, parsePage(sp.page));
+  const customSort = sortState.key !== "gas" || sortState.dir !== "desc";
+  const tableQuery = { segment: segment && counts.some((c) => c.s.id === segment) ? segment : undefined };
+  const pagerQuery = { ...tableQuery, sort: customSort ? sortState.key : undefined, dir: customSort ? sortState.dir : undefined };
   const attributed = payers.reduce((s, p) => s + (p.usdc_gas_7d ?? 0), 0);
 
   return (
@@ -74,9 +85,17 @@ export default async function GasLeaderboardPage({ searchParams }: { searchParam
               );
             })}
           </div>
-          {rest.length > 0 && <SegmentTable projects={rest} config={GAS_VIEW} networkGas={networkGas} startRank={4} />}
+          <SegmentTable
+            projects={paged.rows}
+            config={GAS_VIEW}
+            networkGas={networkGas}
+            startRank={paged.from || 1}
+            sort={{ basePath: "/gas", query: tableQuery, key: sortState.key, dir: sortState.dir }}
+          />
+          <Pagination paged={paged} basePath="/gas" query={pagerQuery} noun="projects" />
         </>
       )}
     </main>
   );
 }
+

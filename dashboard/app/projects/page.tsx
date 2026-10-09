@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { getNetworkDaily, listProjects } from "@/lib/api";
 import { SegmentTable } from "@/components/SegmentTable";
-import { SEGMENTS, rankProjects, segmentConfig, sumGas } from "@/lib/segments";
+import { Pagination } from "@/components/Pagination";
+import { ColumnKey, SEGMENTS, segmentConfig, sortProjects, sumGas } from "@/lib/segments";
+import { paginate, parsePage, parseSort } from "@/lib/tableState";
 import { formatCompact, formatUsdCompact } from "@/lib/format";
 import { ProjectSummary, SegmentId } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-const ROW_LIMIT = 100;
 
 function overview(id: SegmentId, projects: ProjectSummary[]): { big: string; sub: string } {
   const tx = projects.reduce((s, p) => s + (p.tx_count_7d ?? 0), 0);
@@ -16,8 +16,11 @@ function overview(id: SegmentId, projects: ProjectSummary[]): { big: string; sub
   return { big: formatCompact(tx), sub: "transactions (7d)" };
 }
 
-export default async function ProjectsPage({ searchParams }: { searchParams: Promise<{ segment?: string }> }) {
-  const { segment } = await searchParams;
+export default async function ProjectsPage({ searchParams }: {
+  searchParams: Promise<{ segment?: string; sort?: string; dir?: string; page?: string }>;
+}) {
+  const sp = await searchParams;
+  const segment = sp.segment;
   const [all, days] = await Promise.all([listProjects(), getNetworkDaily(7)]);
   const networkGas = sumGas(days);
 
@@ -25,8 +28,11 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
   const selectedId = (groups.find((g) => g.cfg.id === segment)?.cfg.id ?? groups.find((g) => g.cfg.id === "defi")?.cfg.id ?? groups[0]?.cfg.id) as SegmentId | undefined;
   const cfg = segmentConfig(selectedId);
   const selected = groups.find((g) => g.cfg.id === selectedId)?.items ?? [];
-  const ranked = rankProjects(selected, cfg.sortBy, networkGas);
-  const shown = ranked.slice(0, ROW_LIMIT);
+  const sortState = parseSort(sp.sort, sp.dir, ["name", ...cfg.columns], { key: cfg.sortBy, dir: "desc" });
+  const sorted = sortProjects(selected, sortState.key as ColumnKey | "name", sortState.dir, networkGas);
+  const paged = paginate(sorted, parsePage(sp.page));
+  const customSort = sortState.key !== cfg.sortBy || sortState.dir !== "desc";
+  const pagerQuery = { segment: cfg.id, sort: customSort ? sortState.key : undefined, dir: customSort ? sortState.dir : undefined };
 
   return (
     <main className="container section">
@@ -53,9 +59,16 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
 
       <div className="eyebrow" style={{ marginBottom: 8 }}>{cfg.label.toUpperCase()} · {selected.length}</div>
       <p className="lede" style={{ marginBottom: 16 }}>{cfg.blurb}</p>
-      <SegmentTable projects={shown} config={cfg} networkGas={networkGas} />
+      <SegmentTable
+        projects={paged.rows}
+        config={cfg}
+        networkGas={networkGas}
+        startRank={paged.from || 1}
+        sort={{ basePath: "/projects", query: { segment: cfg.id }, key: sortState.key, dir: sortState.dir }}
+      />
+      <Pagination paged={paged} basePath="/projects" query={pagerQuery} noun="projects" />
       <p className="pt-note">
-        {ranked.length > shown.length && <>Showing the top {shown.length} of {ranked.length}, ranked by {cfg.sortBy === "tvl" ? "value locked" : cfg.sortBy === "gas" ? "gas paid" : "transactions"}. The full set is in the public API (<code>GET /projects</code>). </>}
+        Click a column to sort; the full set is also in the public API (<code>GET /projects</code>).
         Names come from public on-chain metadata; <b>verified</b> marks hand-checked projects, everything else is discovered automatically and is not an endorsement.
       </p>
       {(cfg.id === "token" || cfg.id === "stablecoin") && (

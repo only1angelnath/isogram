@@ -58,7 +58,7 @@ export const SEGMENTS: SegmentConfig[] = [
     label: "Tokens",
     short: "Tokens",
     blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
-    columns: ["price", "fdv", "liquidity", "tx", "users", "failed"],
+    columns: ["price", "fdv", "liquidity", "tx", "users"],
     sortBy: "tx",
     showsScore: false,
     showsTvl: false,
@@ -126,6 +126,30 @@ export function rankProjects(projects: ProjectSummary[], key: ColumnKey, network
     if (av === null && bv !== null) return 1;
     if (bv === null && av !== null) return -1;
     return (bv ?? 0) - (av ?? 0) || (b.tx_count_7d ?? 0) - (a.tx_count_7d ?? 0);
+  });
+}
+
+/**
+ * Sort by any column (or the project name). Unmeasured values (null) always sort LAST, in
+ * either direction, so "ascending by price" never opens with a wall of dashes. Ties fall
+ * back to activity, then name, so the order is stable across page loads.
+ */
+export function sortProjects(
+  projects: ProjectSummary[],
+  key: ColumnKey | "name",
+  dir: "asc" | "desc",
+  networkGas: number | null,
+): ProjectSummary[] {
+  const sign = dir === "asc" ? 1 : -1;
+  return [...projects].sort((a, b) => {
+    if (key === "name") {
+      return sign * a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (b.tx_count_7d ?? 0) - (a.tx_count_7d ?? 0);
+    }
+    const av = metricOf(a, key, networkGas);
+    const bv = metricOf(b, key, networkGas);
+    if (av === null && bv !== null) return 1;
+    if (bv === null && av !== null) return -1;
+    return sign * ((av ?? 0) - (bv ?? 0)) || (b.tx_count_7d ?? 0) - (a.tx_count_7d ?? 0) || a.name.localeCompare(b.name);
   });
 }
 
