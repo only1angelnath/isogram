@@ -58,6 +58,15 @@ export default async function ProjectsPage({ searchParams }: { searchParams: Pro
         {ranked.length > shown.length && <>Showing the top {shown.length} of {ranked.length}, ranked by {cfg.sortBy === "tvl" ? "value locked" : cfg.sortBy === "gas" ? "gas paid" : "transactions"}. The full set is in the public API (<code>GET /projects</code>). </>}
         Names come from public on-chain metadata; <b>verified</b> marks hand-checked projects, everything else is discovered automatically and is not an endorsement.
       </p>
+      {(cfg.id === "token" || cfg.id === "stablecoin") && (
+        <p className="pt-note">
+          Price, FDV and liquidity are third-party data from GeckoTerminal, refreshed hourly. <b>thin</b> means under
+          $10,000 of liquidity and <b>no trading</b> means under 1% of liquidity traded in the last 24 hours; FDV is
+          hidden in both cases. A <b>CoinGecko</b> tag means the token maps to a CoinGecko listing; without it the price
+          comes from a DEX pool and is unverified. Not investment advice.
+        </p>
+      )}
     </main>
   );
 }
+

@@ -8,7 +8,7 @@
 
 import { ProjectSummary, SegmentId } from "./types";
 
-export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score";
+export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score" | "price" | "fdv" | "liquidity";
 
 export interface SegmentConfig {
   id: SegmentId;
@@ -57,8 +57,8 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "token",
     label: "Tokens",
     short: "Tokens",
-    blurb: "Tokens, memecoins and wrapped assets found on-chain. Price and market data are not tracked yet, so only on-chain usage is shown.",
-    columns: ["tx", "users", "gas", "failed"],
+    blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
+    columns: ["price", "fdv", "liquidity", "tx", "users", "failed"],
     sortBy: "tx",
     showsScore: false,
     showsTvl: false,
@@ -67,8 +67,8 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "stablecoin",
     label: "Stablecoins",
     short: "Stablecoins",
-    blurb: "Hand-verified stablecoins (USDC, EURC, USYC). Their activity is shown here; supply tracking is not wired in yet.",
-    columns: ["tx", "users", "gas", "failed"],
+    blurb: "Hand-verified stablecoins (USDC, EURC, USYC). Usage comes from the chain; price and liquidity are third-party data from GeckoTerminal.",
+    columns: ["price", "liquidity", "tx", "users", "failed"],
     sortBy: "tx",
     showsScore: false,
     showsTvl: false,
@@ -97,6 +97,9 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
   share: "net. gas share",
   failed: "failed",
   score: "score",
+  price: "price",
+  fdv: "fdv",
+  liquidity: "liquidity",
 };
 
 /** The value a column shows for a project (null = not measured). */
@@ -108,6 +111,9 @@ export function metricOf(p: ProjectSummary, key: ColumnKey, networkGas: number |
     case "gas": return p.usdc_gas_7d;
     case "failed": return p.failed_rate_7d;
     case "score": return p.score;
+    case "price": return p.market?.price_usd ?? null;
+    case "fdv": return p.market?.fdv_usd ?? null;
+    case "liquidity": return p.market?.liquidity_usd ?? null;
     case "share": return networkGas !== null && networkGas > 0 && p.usdc_gas_7d !== null ? p.usdc_gas_7d / networkGas : null;
   }
 }
@@ -127,3 +133,4 @@ export function sumGas(days: { usdc_gas_paid: number | null }[]): number | null 
   const vals = days.map((d) => d.usdc_gas_paid).filter((v): v is number => v !== null);
   return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
 }
+

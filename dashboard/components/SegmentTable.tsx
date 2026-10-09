@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ProjectSummary } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { COLUMN_LABELS, ColumnKey, SegmentConfig, metricOf } from "@/lib/segments";
-import { failedTone, formatCount, formatPercent, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
+import { failedTone, formatCount, formatPercent, formatPrice, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
 
 function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): string {
   const v = metricOf(p, key, networkGas);
@@ -14,8 +14,16 @@ function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): str
     case "share": return formatPercent(v);
     case "failed": return formatPercent(v);
     case "score": return formatScore(v);
+    case "price": return formatPrice(v);
+    case "fdv":
+    case "liquidity": return v === null ? "—" : formatUsdCompact(v);
   }
 }
+
+const QUALITY_NOTE: Record<string, { label: string; title: string }> = {
+  thin: { label: "thin", title: "Under $10,000 of liquidity: this price is easy to move, so FDV is not shown." },
+  inactive: { label: "no trading", title: "Liquidity exists but almost nothing traded in 24h: the price may be stale, so FDV is not shown." },
+};
 
 export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
   projects: ProjectSummary[];
@@ -50,6 +58,7 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
                     <span style={{ fontWeight: 600, display: "block", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
                     <span className="iso-pill" style={{ marginTop: 3 }}>{p.category ?? "unclassified"}</span>
                     {p.tier === "curated" && <span className="iso-pill good" style={{ marginLeft: 6 }}>verified</span>}
+                    {p.market?.listed_on_coingecko && <span className="iso-pill good" style={{ marginLeft: 6 }} title="Mapped to a CoinGecko listing">CoinGecko</span>}
                   </span>
                 </Link>
               </td>
@@ -57,6 +66,18 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
                 const v = metricOf(p, k, networkGas);
                 if (k === "failed") {
                   return <td key={k}><span className={`iso-pill ${failedTone(v)}`}>{cell(k, p, networkGas)}</span></td>;
+                }
+                if (k === "price") {
+                  const note = p.market ? QUALITY_NOTE[p.market.quality] : undefined;
+                  return (
+                    <td key={k} className="iso-num" style={note ? { opacity: 0.8 } : undefined}>
+                      {cell(k, p, networkGas)}
+                      {note && <span className="iso-pill warn" style={{ marginLeft: 6 }} title={note.title}>{note.label}</span>}
+                    </td>
+                  );
+                }
+                if (k === "fdv" && v === null && p.market) {
+                  return <td key={k} className="iso-num iso-dim" title="Not shown: FDV is only meaningful when the price is backed by real liquidity and trading.">—</td>;
                 }
                 if (k === "score") {
                   return <td key={k} className="iso-num" style={{ color: "var(--accent)" }}>{cell(k, p, networkGas)}</td>;
@@ -80,3 +101,4 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1 }: {
     </div>
   );
 }
+

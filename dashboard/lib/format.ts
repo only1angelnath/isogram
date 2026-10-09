@@ -73,3 +73,14 @@ export function failedTone(rate: number | null): "good" | "warn" | "bad" | "" {
   if (rate < 0.05) return "warn";
   return "bad";
 }
+
+
+/** Token price with sensible precision: $2,492 / $1.12 / $0.0159 / $0.00000263 (never scientific). */
+export function formatPrice(value: number | null): string {
+  if (value === null || !(value > 0)) return "—";
+  if (value >= 1000) return "$" + Math.round(value).toLocaleString("en-US");
+  if (value >= 1) return "$" + value.toFixed(2);
+  if (value >= 0.01) return "$" + value.toFixed(4);
+  const decimals = Math.min(12, 3 - Math.floor(Math.log10(value)));
+  return "$" + value.toFixed(decimals);
+}

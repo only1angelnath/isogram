@@ -39,7 +39,8 @@ export default async function HomePage() {
           <p>
             USDC gas paid, TVL, and the Arc Native Score — three views of the
             same dataset, read directly from Arc mainnet via RPC. No
-            third-party indexer in the pipeline.
+            third-party indexer in the on-chain pipeline; token prices, where
+            shown, are labelled third-party data.
           </p>
           <div className="cta-row">
             <Link href="/projects" className="btn">
@@ -133,8 +134,10 @@ export default async function HomePage() {
         <div className="eyebrow">How the numbers are made</div>
         <h2>Three steps, one source of truth</h2>
         <p className="lede">
-          Every figure on Isogram traces back through the same pipeline —
-          nothing purchased from a third-party indexer, nothing estimated.
+          Every on-chain figure on Isogram traces back through the same pipeline —
+          nothing purchased from a third-party indexer, nothing estimated. The one
+          exception is token market data (price, FDV, liquidity), which comes from
+          GeckoTerminal and is labelled as such wherever it appears.
         </p>
         <div className="pipeline">
           <div className="pipe big">
@@ -193,3 +196,4 @@ function Stat({ big, lbl }: { big: string; lbl: string }) {
     </div>
   );
 }
+

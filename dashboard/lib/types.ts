@@ -6,6 +6,21 @@
 
 export type SegmentId = "defi" | "launchpad" | "infra" | "token" | "stablecoin" | "other";
 
+/** Third-party market data (GeckoTerminal), token and stablecoin projects only. Not chain-derived. */
+export interface MarketData {
+  price_usd: number | null;
+  /** Withheld (null) unless quality is "ok": FDV inherits every flaw of the price. */
+  fdv_usd: number | null;
+  market_cap_usd: number | null;
+  liquidity_usd: number | null;
+  volume_24h_usd: number | null;
+  /** ok = trustworthy; thin = under $10k liquidity; inactive = reserves but ~no trading. */
+  quality: "ok" | "thin" | "inactive";
+  listed_on_coingecko: boolean;
+  source: string;
+  fetched_at: string;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -22,6 +37,8 @@ export interface ProjectSummary {
   failed_tx_7d: number | null;
   failed_rate_7d: number | null;
   computed_at: string | null;
+  /** null/absent = no usable market data (no pool indexed, no price, or older than 24h). */
+  market?: MarketData | null;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -115,3 +132,4 @@ export interface ScorePoint {
   usdc_gas_7d: number | null;
   unique_users_7d: number | null;
 }
+

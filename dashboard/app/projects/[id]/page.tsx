@@ -7,7 +7,7 @@ import { ScoreGauge } from "@/components/ScoreGauge";
 import { Avatar } from "@/components/Avatar";
 import { fillCalendar } from "@/lib/series";
 import { segmentConfig, sumGas } from "@/lib/segments";
-import { failedTone, formatCount, formatPercent, formatRelativeAge, formatUsd, formatUsdCompact } from "@/lib/format";
+import { failedTone, formatCount, formatPercent, formatPrice, formatRelativeAge, formatUsd, formatUsdCompact } from "@/lib/format";
 
 interface ProjectPageProps {
   params: Promise<{ id: string }>;
@@ -36,6 +36,8 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
     getNetworkDaily(7),
   ]);
   const networkGas = sumGas(netDays);
+  const market = project.market ?? null;
+  const isPriced = project.segment === "token" || project.segment === "stablecoin";
   const share = networkGas && project.usdc_gas_7d !== null ? project.usdc_gas_7d / networkGas : null;
 
   const txPts = fillCalendar(daily, (d) => ({ value: d.tx_count, detail: d.failed_tx_count ? [`${formatCount(d.failed_tx_count)} failed`] : undefined }));
@@ -96,8 +98,39 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
       {!cfg.showsTvl && (
         <p className="pt-note" style={{ marginBottom: 24 }}>
           {cfg.label} are measured by usage, not value locked, so there is no TVL or score for this project.
-          {project.segment === "token" && " Price and market data are not tracked yet."}
         </p>
+      )}
+
+      {isPriced && (
+        <div className="panel" style={{ padding: 20, marginBottom: 32 }}>
+          <div style={{ fontWeight: 600, marginBottom: 12 }}>
+            Market data <span className="iso-pill" style={{ marginLeft: 8 }}>third-party · GeckoTerminal</span>
+          </div>
+          {market ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, marginBottom: 12 }}>
+                <div className="stat-panel"><div className="value mono">{formatPrice(market.price_usd)}</div><div className="label">price</div></div>
+                <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.fdv_usd)}</div><div className="label">fdv</div></div>
+                <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.liquidity_usd)}</div><div className="label">liquidity</div></div>
+                <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.volume_24h_usd)}</div><div className="label">volume (24h)</div></div>
+              </div>
+              {market.quality === "thin" && (
+                <p className="pt-note" style={{ marginBottom: 8 }}>Liquidity is under $10,000, so this price is easy to move and FDV is not shown.</p>
+              )}
+              {market.quality === "inactive" && (
+                <p className="pt-note" style={{ marginBottom: 8 }}>There is liquidity but almost no trading in the last 24 hours, so this price may be stale and FDV is not shown.</p>
+              )}
+              <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)" }}>
+                updated {formatRelativeAge(market.fetched_at)} ·{" "}
+                {market.listed_on_coingecko ? "mapped to a CoinGecko listing" : "not CoinGecko-listed: the price comes from a DEX pool and is unverified"}
+              </p>
+            </>
+          ) : (
+            <p className="no-data">
+              No market data. GeckoTerminal does not index a trading pool for this token, or its last refresh is more than a day old.
+            </p>
+          )}
+        </div>
       )}
 
       {cfg.showsScore && project.score === null && (
@@ -149,3 +182,4 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
     </main>
   );
 }
+

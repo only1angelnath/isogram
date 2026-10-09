@@ -59,9 +59,21 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
 - **Missing data is reported as `null`,** not zero. Active addresses are not available
   for the first days of history (before the rollup pipeline existed), and a project's
   user count only covers days it was already tracked.
-- **Token prices are not tracked.** Network and project metrics are read directly from
-  the chain. The one outside source is contract discovery, which uses GeckoTerminal and
-  CoinGecko metadata to help identify and classify contracts before a human confirms them.
+- **Network and project usage metrics are read directly from the chain.** The exceptions
+  are token market data and contract discovery, both from CoinGecko's GeckoTerminal API,
+  and both labelled as third-party wherever they appear.
+- **Token market data (price, FDV, liquidity, 24h volume) is third-party.** It is shown
+  only for token and stablecoin projects, refreshed hourly, and only where GeckoTerminal
+  indexes a trading pool; about half of tracked tokens have a priced pool, and most of
+  those are thin. Each value carries a quality flag: `thin` means under $10,000 of liquidity and
+  `inactive` means under 1% of liquidity traded in 24 hours. FDV and market cap are
+  withheld unless quality is `ok`, because they inherit every flaw of the price. Data
+  older than 24 hours is hidden. A `CoinGecko` tag means the token maps to a CoinGecko
+  listing; without it the price comes from a DEX pool and is unverified. Token names are
+  chosen by whoever deploys the contract, so a token called "Bitcoin" is not necessarily
+  Bitcoin.
+- **Contract discovery** uses GeckoTerminal and CoinGecko metadata to help identify and
+  classify contracts before a human confirms them.
 
 ## API
 
@@ -71,7 +83,7 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
 | `GET /metrics/network/daily` | Daily network metrics |
 | `GET /metrics/tokens/daily` | Daily per-token activity |
 | `GET /metrics/contracts/top` | Most active contracts |
-| `GET /projects`, `/projects/{id}` | Tracked projects and detail |
+| `GET /projects`, `/projects/{id}` | Tracked projects and detail (token and stablecoin projects include a `market` object) |
 | `GET /projects/{id}/daily` | Daily metrics for one project |
 | `GET /gas/top`, `/tvl/top`, `/scores/top` | Leaderboards |
 | `GET /scores/{id}/history` | Score history for a project |
