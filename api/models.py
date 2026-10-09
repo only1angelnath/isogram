@@ -10,6 +10,25 @@ from typing import Optional
 from pydantic import BaseModel, field_validator
 
 
+class MarketData(BaseModel):
+    """Third-party market data (GeckoTerminal) for a token or stablecoin project. NOT chain-derived.
+
+    quality: "ok" (enough liquidity and trading to trust the price), "thin" (little liquidity),
+    "inactive" (reserves but almost no trading, so the price may be stale or spoofed).
+    FDV and market cap are only given when quality is "ok"; they are not meaningful otherwise.
+    """
+
+    price_usd: Optional[float] = None
+    fdv_usd: Optional[float] = None
+    market_cap_usd: Optional[float] = None
+    liquidity_usd: Optional[float] = None
+    volume_24h_usd: Optional[float] = None
+    quality: str
+    listed_on_coingecko: bool = False
+    source: str
+    fetched_at: str
+
+
 class ProjectSummary(BaseModel):
     id: str
     name: str
@@ -25,6 +44,8 @@ class ProjectSummary(BaseModel):
     failed_tx_7d: Optional[int] = None
     failed_rate_7d: Optional[float] = None
     computed_at: Optional[str] = None
+    # Token / stablecoin projects only, and only while the data is fresh (see aggregate.build_market).
+    market: Optional[MarketData] = None
 
 
 class ProjectDetail(ProjectSummary):
@@ -154,3 +175,4 @@ class PipelineStatus(BaseModel):
     data_through: Optional[str] = None  # timestamp of the last block applied
     lag_seconds: Optional[int] = None
     checkpoint_updated_at: Optional[str] = None
+

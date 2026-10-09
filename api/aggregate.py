@@ -11,7 +11,7 @@ never an average or a sum across runs.
 """
 
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -42,6 +42,14 @@ TOKEN_SYMBOLS = {
     "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1": "EURC",
     "0x8a5d989bbb96929f689b0200f435f53da42bf490": "USYC",
 }
+
+
+# --- Third-party market data (docs/decisions/ADR-005) -----------------------------------
+# Only these segments are priced (the ones with no TVL and no score under ADR-004).
+MARKET_SEGMENTS = {"token", "stablecoin"}
+MARKET_STALE_AFTER = timedelta(hours=24)   # refreshed hourly; older than this = unavailable
+THIN_LIQUIDITY_USD = 10_000                # below this the price is easily moved or meaningless
+INACTIVE_VOLUME_RATIO = 0.01               # 24h volume under 1% of liquidity = barely traded
 
 
 def latest_score_by_project(score_rows: list[dict]) -> dict[str, dict]:
@@ -81,7 +89,53 @@ def _rate(numerator, denominator) -> Optional[float]:
     return float(n / d)
 
 
-def build_project_summary(project: dict, score_row: Optional[dict]) -> dict:
+def build_market(row: Optional[dict], now: Optional[datetime] = None) -> Optional[dict]:
+    """token_market_data row -> API `market` object, or None when there is nothing trustworthy
+    to show (no row, no price, or a row older than MARKET_STALE_AFTER).
+
+    Quality: thin (liquidity unknown or under $10k) > inactive (liquidity but ~no trading) > ok.
+    FDV and market cap are withheld unless quality is ok: FDV is price x supply, so it inherits
+    every flaw of the price (a $39M pool nobody trades once produced a $357B 'FDV').
+    """
+    if not row:
+        return None
+    fetched = _parse_iso(row.get("fetched_at"))
+    if fetched is not None and fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    if fetched is None or now - fetched > MARKET_STALE_AFTER:
+        return None
+    price = _to_float(row.get("price_usd"))
+    if price is None or price <= 0:
+        return None
+    liquidity = _to_float(row.get("liquidity_usd"))
+    volume = _to_float(row.get("volume_24h_usd"))
+    if liquidity is None or liquidity < THIN_LIQUIDITY_USD:
+        quality = "thin"
+    elif volume is None or volume < liquidity * INACTIVE_VOLUME_RATIO:
+        quality = "inactive"
+    else:
+        quality = "ok"
+    ok = quality == "ok"
+    return {
+        "price_usd": price,
+        "fdv_usd": _to_float(row.get("fdv_usd")) if ok else None,
+        "market_cap_usd": _to_float(row.get("market_cap_usd")) if ok else None,
+        "liquidity_usd": liquidity,
+        "volume_24h_usd": volume,
+        "quality": quality,
+        "listed_on_coingecko": bool((row.get("coingecko_coin_id") or "").strip()),
+        "source": row.get("source") or "geckoterminal",
+        "fetched_at": row["fetched_at"],
+    }
+
+
+def market_by_address(market_rows: list[dict]) -> dict[str, dict]:
+    return {(r.get("contract_address") or "").lower(): r for r in market_rows or []}
+
+
+def build_project_summary(project: dict, score_row: Optional[dict], market_row: Optional[dict] = None,
+                          now: Optional[datetime] = None) -> dict:
     """
     Merge a `projects` row with its latest `project_scores` row (if any) into
     one API-facing dict. A project with no score yet (brand new, or the
@@ -115,13 +169,24 @@ def build_project_summary(project: dict, score_row: Optional[dict]) -> dict:
         "failed_tx_7d": failed,
         "failed_rate_7d": _rate(failed, tx) if (tx is not None and failed is not None) else None,
         "computed_at": score_row.get("computed_at") if score_row else None,
+        "market": build_market(market_row, now) if segment_for(project.get("category")) in MARKET_SEGMENTS else None,
     }
 
 
-def build_all_summaries(projects: list[dict], score_rows: list[dict]) -> list[dict]:
+def primary_contract(project: dict) -> Optional[str]:
+    contracts = project.get("contracts") or []
+    return contracts[0].lower() if contracts else None
+
+
+def build_all_summaries(projects: list[dict], score_rows: list[dict],
+                        market_rows: Optional[list[dict]] = None, now: Optional[datetime] = None) -> list[dict]:
     """Build a project summary for every tracked project, scored or not."""
     latest = latest_score_by_project(score_rows)
-    return [build_project_summary(p, latest.get(p["id"])) for p in projects]
+    markets = market_by_address(market_rows or [])
+    return [
+        build_project_summary(p, latest.get(p["id"]), markets.get(primary_contract(p) or ""), now)
+        for p in projects
+    ]
 
 
 def top_by_metric(summaries: list[dict], metric: str, limit: int) -> list[dict]:
@@ -329,3 +394,4 @@ def build_score_history(rows: list[dict]) -> list[dict]:
         "usdc_gas_7d": _to_float(r.get("usdc_gas_7d")),
         "unique_users_7d": r.get("unique_users_7d"),
     } for r in rows]
+

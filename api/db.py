@@ -70,6 +70,29 @@ def fetch_projects(client: Client) -> list[dict]:
     )
 
 
+MARKET_COLUMNS = ("contract_address, price_usd, fdv_usd, market_cap_usd, liquidity_usd, "
+                  "volume_24h_usd, coingecko_coin_id, source, fetched_at")
+
+
+def fetch_market_data(client: Client) -> list[dict]:
+    """Every token_market_data row (third-party prices; see ADR-005). Keyset-paginated."""
+    return _fetch_all_pages_keyset(
+        lambda: client.table("token_market_data").select(MARKET_COLUMNS),
+        cursor_column="contract_address",
+    )
+
+
+def fetch_market_for_address(client: Client, address: str) -> dict | None:
+    result = (
+        client.table("token_market_data")
+        .select(MARKET_COLUMNS)
+        .eq("contract_address", address.lower())
+        .limit(1)
+        .execute()
+    )
+    return (result.data or [None])[0]
+
+
 def fetch_project(client: Client, project_id: str) -> dict | None:
     result = (
         client.table("projects")
@@ -207,3 +230,4 @@ def fetch_pipeline_status(client: Client) -> dict | None:
     the last applied block), checkpoint_updated_at. None if unavailable."""
     rows = client.rpc("pipeline_status", {}).execute().data or []
     return rows[0] if rows else None
+
