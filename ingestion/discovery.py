@@ -499,16 +499,15 @@ def _classify_from_blockscout(info: dict) -> dict | None:
     Category logic, in priority order:
     1. Token behind an EIP-1167 (or other) proxy whose IMPLEMENTATION name
        suggests a templated launchpad clone (e.g. "ArgusV4LaunchToken7")
-       -> category "launchpad", ALWAYS — this overrides _infer_category
-       even if the token's own name/symbol would otherwise match e.g.
-       "meme" or "stablecoin", because launchpad-clone provenance is a
-       more useful signal for this dashboard than the token's surface
-       branding. Keeps mass-produced clone tokens visually and
-       structurally separate from independently-built projects — they're
-       real activity, but a different kind than a project someone wrote
-       from scratch, and lumping hundreds of near-identical clones in with
-       genuine dApps would dilute "what's actually live on Arc" for a
-       grant reviewer.
+       -> category "token", ALWAYS - this overrides _infer_category so a
+       mass-produced clone named "USDC" or "Wrapped Ether" can never land in
+       the hand-verified stablecoin/wrapped segments.
+       (Until 2026-10-09 this rule returned "launchpad". That filed ~350
+       clone TOKENS under Launchpads, but a launchpad is the platform that
+       mints them, not each token it mints, so the Launchpads tab listed
+       hundreds of tokens instead of the handful of real platforms. Clones
+       now live in Tokens, ranked by trading volume, so real activity
+       surfaces first. "launchpad" is reserved for the platform contracts.)
     2. Any other recognized ERC-20 token -> category inferred from its
        name/symbol via the shared DeFiLlama-style taxonomy
        (_infer_category) — "stablecoin", "meme", "governance", "wrapped",
@@ -530,7 +529,7 @@ def _classify_from_blockscout(info: dict) -> dict | None:
     if token:
         symbol = token.get("symbol")
         token_name = token.get("name")
-        category = "launchpad" if "launch" in impl_names.lower() else _infer_category(token_name, symbol)
+        category = "token" if "launch" in impl_names.lower() else _infer_category(token_name, symbol)
         return {
             "category": category,
             "gecko_symbol": symbol,
@@ -864,3 +863,4 @@ if __name__ == "__main__":
     print(f"Discovery run: {result['touched']} contracts touched, "
           f"{result['trending_seeded']} seeded from trending pools, "
           f"{result['classified']} classified, {result['promoted']} promoted.")
+
