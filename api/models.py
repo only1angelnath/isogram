@@ -23,6 +23,9 @@ class MarketData(BaseModel):
     market_cap_usd: Optional[float] = None
     liquidity_usd: Optional[float] = None
     volume_24h_usd: Optional[float] = None
+    # Sum of the last 7 UTC days in the token's MOST LIQUID pool only (can understate tokens that
+    # trade in several pools); refreshed on a slower schedule than the rest. None when unknown/stale.
+    volume_7d_usd: Optional[float] = None
     quality: str
     listed_on_coingecko: bool = False
     source: str

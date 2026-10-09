@@ -23,6 +23,7 @@ def row(**kw):
     base = {
         "contract_address": "0xaaa", "price_usd": "1.5", "fdv_usd": "2000000", "market_cap_usd": None,
         "liquidity_usd": "50000", "volume_24h_usd": "25000", "coingecko_coin_id": None,
+        "volume_7d_usd": "120000", "volume_7d_fetched_at": (NOW - timedelta(hours=3)).isoformat(),
         "source": "geckoterminal", "fetched_at": (NOW - timedelta(hours=1)).isoformat(),
     }
     base.update(kw)
@@ -69,6 +70,31 @@ def test_volume_at_one_percent_of_liquidity_is_ok_and_below_is_inactive():
 def test_coingecko_listing_flag():
     assert agg.build_market(row(coingecko_coin_id="usd-coin"), NOW)["listed_on_coingecko"] is True
     assert agg.build_market(row(coingecko_coin_id="  "), NOW)["listed_on_coingecko"] is False
+
+
+# ------------------------------------------------------------------ 7-day volume
+
+def test_fresh_7d_volume_is_exposed_and_independent_of_quality():
+    m = agg.build_market(row(), NOW)
+    assert m["volume_7d_usd"] == 120_000.0
+    thin = agg.build_market(row(liquidity_usd="500"), NOW)
+    assert thin["quality"] == "thin" and thin["volume_7d_usd"] == 120_000.0     # volume is a fact, FDV is the guess
+
+
+def test_7d_volume_older_than_48_hours_or_untimed_is_unknown_not_stale_data():
+    assert agg.build_market(row(volume_7d_fetched_at=(NOW - timedelta(hours=48)).isoformat()), NOW)["volume_7d_usd"] == 120_000.0
+    assert agg.build_market(row(volume_7d_fetched_at=(NOW - timedelta(hours=49)).isoformat()), NOW)["volume_7d_usd"] is None
+    assert agg.build_market(row(volume_7d_fetched_at=None), NOW)["volume_7d_usd"] is None
+    assert agg.build_market(row(volume_7d_usd=None), NOW)["volume_7d_usd"] is None
+
+
+def test_zero_7d_volume_is_a_real_zero():
+    assert agg.build_market(row(volume_7d_usd="0"), NOW)["volume_7d_usd"] == 0.0
+
+
+def test_7d_volume_timestamp_without_timezone_is_read_as_utc():
+    naive = (NOW - timedelta(hours=2)).replace(tzinfo=None).isoformat()
+    assert agg.build_market(row(volume_7d_fetched_at=naive), NOW)["volume_7d_usd"] == 120_000.0
 
 
 # ------------------------------------------------------------------ availability

@@ -50,6 +50,7 @@ MARKET_SEGMENTS = {"token", "stablecoin"}
 MARKET_STALE_AFTER = timedelta(hours=24)   # refreshed hourly; older than this = unavailable
 THIN_LIQUIDITY_USD = 10_000                # below this the price is easily moved or meaningless
 INACTIVE_VOLUME_RATIO = 0.01               # 24h volume under 1% of liquidity = barely traded
+VOLUME_7D_STALE_AFTER = timedelta(hours=48)  # 7d volume refreshes every ~6h; older than 2 days = unknown
 
 
 def latest_score_by_project(score_rows: list[dict]) -> dict[str, dict]:
@@ -117,12 +118,19 @@ def build_market(row: Optional[dict], now: Optional[datetime] = None) -> Optiona
     else:
         quality = "ok"
     ok = quality == "ok"
+    volume_7d = _to_float(row.get("volume_7d_usd"))
+    vol7_fetched = _parse_iso(row.get("volume_7d_fetched_at"))
+    if vol7_fetched is not None and vol7_fetched.tzinfo is None:
+        vol7_fetched = vol7_fetched.replace(tzinfo=timezone.utc)
+    if vol7_fetched is None or now - vol7_fetched > VOLUME_7D_STALE_AFTER:
+        volume_7d = None
     return {
         "price_usd": price,
         "fdv_usd": _to_float(row.get("fdv_usd")) if ok else None,
         "market_cap_usd": _to_float(row.get("market_cap_usd")) if ok else None,
         "liquidity_usd": liquidity,
         "volume_24h_usd": volume,
+        "volume_7d_usd": volume_7d,
         "quality": quality,
         "listed_on_coingecko": bool((row.get("coingecko_coin_id") or "").strip()),
         "source": row.get("source") or "geckoterminal",

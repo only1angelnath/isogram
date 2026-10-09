@@ -71,7 +71,7 @@ def fetch_projects(client: Client) -> list[dict]:
 
 
 MARKET_COLUMNS = ("contract_address, price_usd, fdv_usd, market_cap_usd, liquidity_usd, "
-                  "volume_24h_usd, coingecko_coin_id, source, fetched_at")
+                  "volume_24h_usd, volume_7d_usd, volume_7d_fetched_at, coingecko_coin_id, source, fetched_at")
 
 
 def fetch_market_data(client: Client) -> list[dict]:
