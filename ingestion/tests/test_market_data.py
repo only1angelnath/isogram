@@ -87,13 +87,13 @@ def test_collect_targets_filters_categories_uses_primary_contract_and_dedupes():
     assert md.collect_targets(rows) == [addr(1), addr(2), addr(5)]
 
 
-def test_priced_categories_match_token_and_stablecoin_segments():
+def test_priced_categories_match_token_stablecoin_and_launchpad_segments():
     if not SEGMENTS.exists():
         pytest.skip("scoring/ not checked out next to ingestion/")
     spec = importlib.util.spec_from_file_location("segments_for_market_data_test", SEGMENTS)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    expected = {c for c, seg in mod.SEGMENT_BY_CATEGORY.items() if seg in ("token", "stablecoin")}
+    expected = {c for c, seg in mod.SEGMENT_BY_CATEGORY.items() if seg in ("token", "stablecoin", "launchpad")}
     assert md.PRICED_CATEGORIES == expected
 
 

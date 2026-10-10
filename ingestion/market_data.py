@@ -35,9 +35,10 @@ VOLUME_7D_REFRESH_AFTER = timedelta(hours=6)
 SOURCE = "geckoterminal"
 PAGE_SIZE = 1000                # PostgREST's default response cap
 
-# category -> segment 'token' or 'stablecoin' in scoring/segments.py and
-# api/aggregate.py (tests/test_market_data.py fails if this drifts from segments.py).
-PRICED_CATEGORIES = {"token", "meme", "wrapped", "stablecoin", "institutional"}
+# category -> segment 'token', 'stablecoin' or 'launchpad' in scoring/segments.py and
+# api/aggregate.py (tests/test_market_data.py fails if this drifts from segments.py). A launchpad
+# row's FIRST contract is its own token (e.g. ARGUS), which is what gets priced.
+PRICED_CATEGORIES = {"token", "meme", "wrapped", "stablecoin", "institutional", "launchpad"}
 
 
 def _num(value):
