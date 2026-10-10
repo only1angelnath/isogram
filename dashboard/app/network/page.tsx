@@ -42,7 +42,7 @@ export default async function NetworkPage() {
 
   return (
     <main className="container section">
-      <div className="eyebrow">NETWORK</div>
+      <div className="eyebrow">ARC OVERVIEW</div>
       <h2 style={{ fontSize: 32, marginBottom: 12 }}>What is happening on Arc.</h2>
       <p className="lede">
         Chain-wide activity read directly from Arc mainnet receipts: transactions, failures,
@@ -149,3 +149,4 @@ function ChartCard({ title, value, day, children }: {
     </div>
   );
 }
+

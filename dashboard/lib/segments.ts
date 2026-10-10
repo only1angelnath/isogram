@@ -58,7 +58,7 @@ export const SEGMENTS: SegmentConfig[] = [
     label: "Tokens",
     short: "Tokens",
     blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, volume, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed; the table is ranked by 24h trading volume. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
-    columns: ["price", "vol24h", "vol7d", "liquidity", "fdv", "tx", "users"],
+    columns: ["price", "vol24h", "vol7d", "liquidity", "fdv", "tx"],
     sortBy: "vol24h",
     showsScore: false,
     showsTvl: false,
@@ -92,7 +92,7 @@ export function segmentConfig(id: SegmentId | null | undefined): SegmentConfig {
 export const COLUMN_LABELS: Record<ColumnKey, string> = {
   tvl: "tvl",
   tx: "tx (7d)",
-  users: "users (7d)",
+  users: "active users (7d)",
   gas: "gas (7d)",
   share: "net. gas share",
   failed: "failed",
@@ -106,6 +106,7 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
 
 /** Hover text for columns whose basis is not obvious from the label. */
 export const COLUMN_TITLES: Partial<Record<ColumnKey, string>> = {
+  users: "Distinct addresses that interacted with the project's contracts in the last 7 days.",
   vol24h: "Trading volume in the last 24 hours across all pools (GeckoTerminal, third-party).",
   vol7d: "Trading volume over the last 7 UTC days, today included, in the token's most liquid pool only - it can understate tokens that trade in several pools (GeckoTerminal, third-party).",
   fdv: "Fully diluted valuation, shown only when the price is backed by real liquidity and trading.",
