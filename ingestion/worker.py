@@ -669,6 +669,24 @@ def _run_market_data_safely() -> None:
           + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
 
 
+def _run_holders_safely() -> None:
+    """Holder counts (explorer.arc.io) are a nice-to-have: same contract as _run_market_data_safely -
+    bounded by holders.py itself, any error becomes a ::warning:: and never touches the job result."""
+    try:
+        from holders import run_holders_refresh
+
+        result = run_holders_refresh()
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning title=Holder refresh failed::{type(exc).__name__}: {exc}")
+        return
+    print(f"Holders: {result['updated']} refreshed, {result['unindexed']} not indexed as tokens, "
+          f"{result['due']} due of {result['targets']} tokens, {result['calls']} calls"
+          + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
+
+
 def main() -> None:
     start = time.monotonic()
     try:
@@ -680,6 +698,7 @@ def main() -> None:
         raise
     _run_discovery_safely()
     _run_market_data_safely()
+    _run_holders_safely()
     print(f"Finished in {time.monotonic() - start:.1f}s")
 
 

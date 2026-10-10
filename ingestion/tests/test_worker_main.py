@@ -24,6 +24,19 @@ def _no_real_market_data(monkeypatch):
     monkeypatch.setitem(sys.modules, "market_data", mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_holders(monkeypatch):
+    mod = types.ModuleType("holders")
+    mod.run_holders_refresh = lambda: {"due": 0, "calls": 0, "updated": 0, "unindexed": 0, "stopped": None, "targets": 0}
+    monkeypatch.setitem(sys.modules, "holders", mod)
+
+
+def _fake_holders(monkeypatch, behaviour):
+    mod = types.ModuleType("holders")
+    mod.run_holders_refresh = behaviour
+    monkeypatch.setitem(sys.modules, "holders", mod)
+
+
 def _fake_market_data(monkeypatch, behaviour):
     mod = types.ModuleType("market_data")
     mod.run_market_data_refresh = behaviour
@@ -117,6 +130,37 @@ def test_market_data_summary_mentions_7d_volume_progress_and_failures(monkeypatc
     _fake_market_data(monkeypatch, lambda: dict(base, volume_7d_error="RuntimeError: table locked"))
     worker.main()
     assert "7d volume pass failed (RuntimeError: table locked)" in capsys.readouterr().out
+
+
+def test_holder_crash_does_not_fail_the_job(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    def boom():
+        raise RuntimeError("explorer exploded")
+    _fake_holders(monkeypatch, boom)
+    worker.main()                                    # must NOT raise
+    out = capsys.readouterr().out
+    assert "::warning title=Holder refresh failed::RuntimeError" in out and "Finished in" in out
+
+
+def test_holder_summary_is_printed(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    _fake_holders(monkeypatch, lambda: {"due": 150, "calls": 150, "updated": 90, "unindexed": 60, "stopped": "time_budget", "targets": 780})
+    worker.main()
+    assert "Holders: 90 refreshed, 60 not indexed as tokens, 150 due of 780 tokens, 150 calls, stopped early (time_budget)." in capsys.readouterr().out
+
+
+def test_a_market_data_crash_does_not_stop_the_holder_pass(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    ran = []
+    def boom():
+        raise RuntimeError("coingecko exploded")
+    _fake_market_data(monkeypatch, boom)
+    _fake_holders(monkeypatch, lambda: ran.append(1) or {"due": 0, "calls": 0, "updated": 0, "unindexed": 0, "stopped": None, "targets": 0})
+    worker.main()
+    assert ran == [1]
 
 
 def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):
