@@ -82,6 +82,25 @@ def fetch_market_data(client: Client) -> list[dict]:
     )
 
 
+def fetch_holders(client: Client) -> list[dict]:
+    """token_holders rows (holder counts from the Arc explorer). Keyset-paginated."""
+    return _fetch_all_pages_keyset(
+        lambda: client.table("token_holders").select("contract_address, holders_count, fetched_at"),
+        cursor_column="contract_address",
+    )
+
+
+def fetch_holders_for_address(client: Client, address: str) -> dict | None:
+    result = (
+        client.table("token_holders")
+        .select("contract_address, holders_count, fetched_at")
+        .eq("contract_address", address.lower())
+        .limit(1)
+        .execute()
+    )
+    return (result.data or [None])[0]
+
+
 def fetch_market_for_address(client: Client, address: str) -> dict | None:
     result = (
         client.table("token_market_data")

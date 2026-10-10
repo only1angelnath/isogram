@@ -126,9 +126,10 @@ PROJECTS = [
     {"id": "usd", "name": "Usd", "category": "stablecoin", "contracts": ["0xbbb"]},
     {"id": "dex", "name": "Dex", "category": "dex", "contracts": ["0xccc"]},
     {"id": "bare", "name": "Bare", "category": "token", "contracts": []},
+    {"id": "pad", "name": "Pad", "category": "launchpad", "contracts": ["0xddd", "0xportal"]},
 ]
 MARKET_ROWS = [row(contract_address="0xaaa"), row(contract_address="0xbbb", price_usd="1.0"),
-               row(contract_address="0xccc", price_usd="9")]
+               row(contract_address="0xccc", price_usd="9"), row(contract_address="0xddd", price_usd="0.5")]
 
 
 def test_only_token_and_stablecoin_projects_get_market_by_primary_contract():
@@ -136,6 +137,7 @@ def test_only_token_and_stablecoin_projects_get_market_by_primary_contract():
     assert out["tok"]["market"]["price_usd"] == 1.5          # matched case-insensitively
     assert out["usd"]["market"]["price_usd"] == 1.0
     assert out["dex"]["market"] is None                       # DeFi is never priced here
+    assert out["pad"]["market"]["price_usd"] == 0.5           # launchpad: priced via its first contract (the platform token)
     assert out["bare"]["market"] is None
 
 

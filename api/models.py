@@ -49,6 +49,9 @@ class ProjectSummary(BaseModel):
     computed_at: Optional[str] = None
     # Token / stablecoin projects only, and only while the data is fresh (see aggregate.build_market).
     market: Optional[MarketData] = None
+    # Addresses holding the token (Arc explorer), token / stablecoin / launchpad-token projects only.
+    # None = unknown (not indexed as a token, or older than 72h).
+    holders: Optional[int] = None
 
 
 class ProjectDetail(ProjectSummary):

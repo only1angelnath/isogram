@@ -45,11 +45,13 @@ TOKEN_SYMBOLS = {
 
 
 # --- Third-party market data (docs/decisions/ADR-005) -----------------------------------
-# Only these segments are priced (the ones with no TVL and no score under ADR-004).
-MARKET_SEGMENTS = {"token", "stablecoin"}
+# Only these segments are priced: no TVL and no score under ADR-004, so their own token is the market
+# signal (for a launchpad that is the platform token, which is the row's first contract).
+MARKET_SEGMENTS = {"token", "stablecoin", "launchpad"}
 MARKET_STALE_AFTER = timedelta(hours=24)   # refreshed hourly; older than this = unavailable
 THIN_LIQUIDITY_USD = 10_000                # below this the price is easily moved or meaningless
 INACTIVE_VOLUME_RATIO = 0.01               # 24h volume under 1% of liquidity = barely traded
+HOLDERS_STALE_AFTER = timedelta(hours=72)   # refreshed ~every 12h; older than 3 days = unknown
 VOLUME_7D_STALE_AFTER = timedelta(hours=48)  # 7d volume refreshes every ~6h; older than 2 days = unknown
 
 
@@ -138,12 +140,33 @@ def build_market(row: Optional[dict], now: Optional[datetime] = None) -> Optiona
     }
 
 
+def build_holders(row: Optional[dict], now: Optional[datetime] = None) -> Optional[int]:
+    """token_holders row -> holder count, or None when unknown: no row, a cached 404 (NULL count),
+    an unreadable count, or a row older than HOLDERS_STALE_AFTER. Zero is a real value."""
+    if not row:
+        return None
+    count = row.get("holders_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        try:
+            count = int(str(count)) if count is not None and str(count).strip().isdigit() else None
+        except ValueError:
+            count = None
+    if count is None:
+        return None
+    fetched = _parse_iso(row.get("fetched_at"))
+    if fetched is None:
+        return None
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return count if (now or datetime.now(timezone.utc)) - fetched <= HOLDERS_STALE_AFTER else None
+
+
 def market_by_address(market_rows: list[dict]) -> dict[str, dict]:
     return {(r.get("contract_address") or "").lower(): r for r in market_rows or []}
 
 
 def build_project_summary(project: dict, score_row: Optional[dict], market_row: Optional[dict] = None,
-                          now: Optional[datetime] = None) -> dict:
+                          now: Optional[datetime] = None, holders_row: Optional[dict] = None) -> dict:
     """
     Merge a `projects` row with its latest `project_scores` row (if any) into
     one API-facing dict. A project with no score yet (brand new, or the
@@ -178,6 +201,7 @@ def build_project_summary(project: dict, score_row: Optional[dict], market_row: 
         "failed_rate_7d": _rate(failed, tx) if (tx is not None and failed is not None) else None,
         "computed_at": score_row.get("computed_at") if score_row else None,
         "market": build_market(market_row, now) if segment_for(project.get("category")) in MARKET_SEGMENTS else None,
+        "holders": build_holders(holders_row, now) if segment_for(project.get("category")) in MARKET_SEGMENTS else None,
     }
 
 
@@ -187,12 +211,15 @@ def primary_contract(project: dict) -> Optional[str]:
 
 
 def build_all_summaries(projects: list[dict], score_rows: list[dict],
-                        market_rows: Optional[list[dict]] = None, now: Optional[datetime] = None) -> list[dict]:
+                        market_rows: Optional[list[dict]] = None, now: Optional[datetime] = None,
+                        holders_rows: Optional[list[dict]] = None) -> list[dict]:
     """Build a project summary for every tracked project, scored or not."""
     latest = latest_score_by_project(score_rows)
     markets = market_by_address(market_rows or [])
+    holders = market_by_address(holders_rows or [])      # same {lowercased contract: row} shape
     return [
-        build_project_summary(p, latest.get(p["id"]), markets.get(primary_contract(p) or ""), now)
+        build_project_summary(p, latest.get(p["id"]), markets.get(primary_contract(p) or ""), now,
+                              holders.get(primary_contract(p) or ""))
         for p in projects
     ]
 
