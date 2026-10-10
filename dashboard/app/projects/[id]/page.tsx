@@ -37,7 +37,7 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
   ]);
   const networkGas = sumGas(netDays);
   const market = project.market ?? null;
-  const isPriced = project.segment === "token" || project.segment === "stablecoin";
+  const isPriced = project.segment === "token" || project.segment === "stablecoin" || project.segment === "launchpad";
   const share = networkGas && project.usdc_gas_7d !== null ? project.usdc_gas_7d / networkGas : null;
 
   const txPts = fillCalendar(daily, (d) => ({ value: d.tx_count, detail: d.failed_tx_count ? [`${formatCount(d.failed_tx_count)} failed`] : undefined }));
@@ -49,7 +49,8 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
   const stats: { label: string; value: string; tone?: string }[] = [];
   if (cfg.showsTvl) stats.push({ label: "tvl", value: formatUsd(project.tvl_usd) });
   stats.push({ label: "transactions (7d)", value: formatCount(project.tx_count_7d) });
-  stats.push({ label: "unique users (7d)", value: formatCount(project.unique_users_7d) });
+  if (project.segment !== "token") stats.push({ label: "active users (7d)", value: formatCount(project.unique_users_7d) });
+  if (isPriced && project.holders != null) stats.push({ label: "holders", value: formatCount(project.holders) });
   stats.push({ label: "usdc gas (7d)", value: formatUsd(project.usdc_gas_7d, { decimals: 4 }) });
   if (!cfg.showsTvl) stats.push({ label: "share of network gas", value: formatPercent(share, 2) });
   stats.push({ label: "failed tx rate (7d)", value: formatPercent(project.failed_rate_7d), tone: failedTone(project.failed_rate_7d) });

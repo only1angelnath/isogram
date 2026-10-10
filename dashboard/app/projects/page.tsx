@@ -71,7 +71,7 @@ export default async function ProjectsPage({ searchParams }: {
         Click a column to sort; the full set is also in the public API (<code>GET /projects</code>).
         Names come from public on-chain metadata; <b>verified</b> marks hand-checked projects, everything else is discovered automatically and is not an endorsement.
       </p>
-      {(cfg.id === "token" || cfg.id === "stablecoin") && (
+      {(cfg.id === "token" || cfg.id === "stablecoin" || cfg.id === "launchpad") && (
         <p className="pt-note">
           Price, volume, FDV and liquidity are third-party data from GeckoTerminal, refreshed hourly. <b>24h vol</b> covers
           all pools; <b>7d vol</b> covers the token&apos;s most liquid pool only, so it can understate tokens that trade in

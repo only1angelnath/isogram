@@ -20,6 +20,7 @@ function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): str
     case "liquidity":
     case "vol24h":
     case "vol7d": return v === null ? "—" : formatUsdCompact(v);
+    case "holders": return formatCount(v);
   }
 }
 

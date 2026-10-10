@@ -41,6 +41,8 @@ export interface ProjectSummary {
   computed_at: string | null;
   /** null/absent = no usable market data (no pool indexed, no price, or older than 24h). */
   market?: MarketData | null;
+  /** Addresses holding the token (Arc explorer); token / stablecoin / launchpad projects. null = unknown. */
+  holders?: number | null;
 }
 
 export interface ProjectDetail extends ProjectSummary {

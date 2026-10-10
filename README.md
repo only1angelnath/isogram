@@ -75,6 +75,14 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   listing; without it the price comes from a DEX pool and is unverified. Token names are
   chosen by whoever deploys the contract, so a token called "Bitcoin" is not necessarily
   Bitcoin.
+- **Holder counts** (token, stablecoin and launchpad-token projects) come from Arc's own
+  explorer (explorer.arc.io) and are refreshed about every 12 hours; a dash means the explorer
+  does not index the address as a token.
+- **Launchpads** are a curated list of launch platforms, with every contract checked on-chain
+  before it is listed. Usage (transactions, users, gas) is measured on the platform's own
+  contracts and token; the price, volume and liquidity columns describe the platform's own
+  token. Tokens launched through a platform are listed under Tokens, and trading volume per
+  venue is third-party data.
 - **Contract discovery** uses GeckoTerminal and CoinGecko metadata to help identify and
   classify contracts before a human confirms them.
 

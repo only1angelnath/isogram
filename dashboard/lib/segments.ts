@@ -8,7 +8,7 @@
 
 import { ProjectSummary, SegmentId } from "./types";
 
-export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score" | "price" | "fdv" | "liquidity" | "vol24h" | "vol7d";
+export type ColumnKey = "tvl" | "tx" | "users" | "gas" | "share" | "failed" | "score" | "price" | "fdv" | "liquidity" | "vol24h" | "vol7d" | "holders";
 
 export interface SegmentConfig {
   id: SegmentId;
@@ -37,9 +37,9 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "launchpad",
     label: "Launchpads",
     short: "Launchpads",
-    blurb: "Token factories and launch platforms. Judged by usage — transactions, users and the gas their activity burns — not TVL.",
-    columns: ["tx", "users", "gas", "failed"],
-    sortBy: "tx",
+    blurb: "Launch platforms on Arc. Usage (transactions, users, gas) is measured on the platform's own contracts and token; the price, volume and liquidity columns describe the platform's own token and are third-party data from GeckoTerminal. Tokens launched through a platform appear under Tokens.",
+    columns: ["price", "vol24h", "liquidity", "tx", "users", "gas"],
+    sortBy: "vol24h",
     showsScore: false,
     showsTvl: false,
   },
@@ -58,7 +58,7 @@ export const SEGMENTS: SegmentConfig[] = [
     label: "Tokens",
     short: "Tokens",
     blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, volume, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed; the table is ranked by 24h trading volume. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
-    columns: ["price", "vol24h", "vol7d", "liquidity", "fdv", "tx"],
+    columns: ["price", "vol24h", "vol7d", "liquidity", "fdv", "tx", "holders"],
     sortBy: "vol24h",
     showsScore: false,
     showsTvl: false,
@@ -68,7 +68,7 @@ export const SEGMENTS: SegmentConfig[] = [
     label: "Stablecoins",
     short: "Stablecoins",
     blurb: "Hand-verified stablecoins (USDC, EURC, USYC). Usage comes from the chain; price and liquidity are third-party data from GeckoTerminal.",
-    columns: ["price", "liquidity", "tx", "users", "failed"],
+    columns: ["price", "liquidity", "tx", "holders", "users", "failed"],
     sortBy: "tx",
     showsScore: false,
     showsTvl: false,
@@ -102,10 +102,12 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
   liquidity: "liquidity",
   vol24h: "24h vol",
   vol7d: "7d vol",
+  holders: "holders",
 };
 
 /** Hover text for columns whose basis is not obvious from the label. */
 export const COLUMN_TITLES: Partial<Record<ColumnKey, string>> = {
+  holders: "Addresses holding the token, from the Arc explorer (explorer.arc.io); refreshed about every 12 hours. Dash = not indexed as a token.",
   users: "Distinct addresses that interacted with the project's contracts in the last 7 days.",
   vol24h: "Trading volume in the last 24 hours across all pools (GeckoTerminal, third-party).",
   vol7d: "Trading volume over the last 7 UTC days, today included, in the token's most liquid pool only - it can understate tokens that trade in several pools (GeckoTerminal, third-party).",
@@ -126,6 +128,7 @@ export function metricOf(p: ProjectSummary, key: ColumnKey, networkGas: number |
     case "liquidity": return p.market?.liquidity_usd ?? null;
     case "vol24h": return p.market?.volume_24h_usd ?? null;
     case "vol7d": return p.market?.volume_7d_usd ?? null;
+    case "holders": return p.holders ?? null;
     case "share": return networkGas !== null && networkGas > 0 && p.usdc_gas_7d !== null ? p.usdc_gas_7d / networkGas : null;
   }
 }
