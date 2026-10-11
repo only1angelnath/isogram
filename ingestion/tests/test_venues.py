@@ -1,4 +1,4 @@
-"""venues.py: pool parsing, per-venue sums, scan stopping rules, and the 'only write a complete scan' guarantee."""
+"""venues.py: pool parsing, the anomaly filter, per-venue scanning and the write guarantees."""
 
 import sys
 from pathlib import Path
@@ -10,100 +10,140 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import venues as v
 
 
-def pool(dex, vol, name="A / USDC"):
-    return {"attributes": {"name": name, "volume_usd": {"h24": str(vol)}}, "relationships": {"dex": {"data": {"id": dex}}}}
+def pool(vol, reserve=100_000, buyers=20, sellers=20, name="A / USDC", dex=None, h24=True):
+    attrs = {"name": name, "volume_usd": {"h24": str(vol)}, "reserve_in_usd": str(reserve)}
+    if h24:
+        attrs["transactions"] = {"h24": {"buyers": buyers, "sellers": sellers, "buys": 5, "sells": 5}}
+    item = {"attributes": attrs}
+    if dex:
+        item["relationships"] = {"dex": {"data": {"id": dex}}}
+    return item
 
 
 def page(*pools):
     return {"data": list(pools)}
 
 
+def parsed(vol, reserve=100_000, traders=40, name="A / USDC", dex="d"):
+    return {"dex_id": dex, "name": name, "volume": float(vol), "reserve": float(reserve), "traders": traders}
+
+
+# ------------------------------------------------------------------ kinds + parsing
+
 def test_venue_kind_follows_the_confirmed_launchpad_list_only():
     for dex in ("argus", "faze", "foci", "o1-launchpad-arc", "long-supply"):
         assert v.venue_kind(dex) == "launchpad"
-    for dex in ("uniswap-v3-arc", "uniswap-v4-arc", "aero-arc", "peach", "lunya", "arctide", "aka-fun", "minara-fun", "virtuals-arc", "never-heard-of-it"):
-        assert v.venue_kind(dex) == "dex"            # unconfirmed names are NOT promoted to launchpad by guesswork
+    for dex in ("uniswap-v3-arc", "uniswap-v4-arc", "aero-arc", "peach", "lunya", "arctide", "aka-fun", "minara-fun", "virtuals-arc", "x"):
+        assert v.venue_kind(dex) == "dex"
 
 
-def test_parse_pool_reads_venue_volume_and_name_and_tolerates_junk():
-    assert v.parse_pool(pool("Uniswap-V3-Arc", "2442610.5", "cirBTC / USDC 0.01%")) == {
-        "dex_id": "uniswap-v3-arc", "name": "cirBTC / USDC 0.01%", "volume": 2442610.5}
-    assert v.parse_pool(pool("x", None))["volume"] == 0.0
-    assert v.parse_pool(pool("x", "garbage"))["volume"] == 0.0
-    assert v.parse_pool(pool("x", "-5"))["volume"] == 0.0
-    for bad in (None, {}, "x", {"relationships": {}}, {"relationships": {"dex": {"data": None}}},
-                {"relationships": {"dex": {"data": {"id": "  "}}}}):
-        assert v.parse_pool(bad) is None
+def test_parse_pool_reads_volume_reserve_and_traders():
+    p = v.parse_pool(pool(2442610.5, 11431941, 3000, 11, "cirBTC / USDC"), "Uniswap-V3-Arc")
+    assert p == {"dex_id": "uniswap-v3-arc", "name": "cirBTC / USDC", "volume": 2442610.5, "reserve": 11431941.0, "traders": 3011}
 
 
-def test_aggregate_sums_per_venue_counts_active_pools_and_finds_the_top_pool():
-    pools = [v.parse_pool(p) for p in (pool("a", 100, "P1"), pool("a", 300, "P2"), pool("a", 0, "P3"), pool("b", 50, "Q1"))]
-    rows = {r["dex_id"]: r for r in v.aggregate(pools, {"a": "Venue A", "b": "Venue B", "c": "Venue C"})}
-    assert rows["a"]["volume_24h_usd"] == 400.0 and rows["a"]["active_pools"] == 2
-    assert rows["a"]["top_pool_name"] == "P2" and rows["a"]["top_pool_volume_usd"] == 300.0
-    assert rows["a"]["name"] == "Venue A" and rows["a"]["sample_pools"] == 4 and rows["a"]["source"] == "geckoterminal"
-    assert rows["c"]["volume_24h_usd"] == 0.0 and rows["c"]["top_pool_name"] is None and rows["c"]["top_pool_volume_usd"] is None
-    assert rows["b"]["kind"] == "dex"
+def test_parse_pool_missing_pieces_are_handled_not_guessed():
+    assert v.parse_pool(pool(5, h24=False), "d")["traders"] is None                    # no transaction counts at all
+    assert v.parse_pool({"attributes": {"volume_usd": {"h24": "5"}, "transactions": {"h24": {"buyers": 3}}}}, "d")["traders"] is None
+    assert v.parse_pool(pool("garbage", "junk"), "d")["volume"] == 0.0
+    assert v.parse_pool(pool(-5), "d")["volume"] == 0.0
+    assert v.parse_pool(pool(5, dex="from-relationship"))["dex_id"] == "from-relationship"
+    for bad in (None, {}, "x"):
+        assert v.parse_pool(bad, "d") is None or bad == {}                              # {} still has a dex id when one is passed
+    assert v.parse_pool({}, None) is None and v.parse_pool(None) is None
 
 
-def test_a_venue_seen_only_in_pools_falls_back_to_its_id_as_the_name():
-    rows = v.aggregate([v.parse_pool(pool("mystery", 5))], {})
-    assert rows[0]["name"] == "mystery"
+# ------------------------------------------------------------------ the anomaly filter
+
+def test_pools_with_too_few_traders_are_excluded_at_exactly_the_threshold():
+    assert v.classify_pool(parsed(1000, traders=9)) == "excluded"
+    assert v.classify_pool(parsed(1000, traders=10)) == "kept"
+    assert v.classify_pool(parsed(1000, traders=3)) == "excluded"
 
 
-# ------------------------------------------------------------------ scanning
+def test_pools_whose_volume_dwarfs_their_reserves_are_excluded_at_exactly_the_threshold():
+    assert v.classify_pool(parsed(25_000, reserve=1000)) == "kept"                 # 25x: allowed
+    assert v.classify_pool(parsed(25_001, reserve=1000)) == "excluded"
+    assert v.classify_pool(parsed(10, reserve=0)) == "excluded"                    # volume with no reserves at all
 
-def scan(pages_by_number, **kw):
+
+def test_zero_volume_pools_are_kept_and_pools_without_transaction_data_are_unknown():
+    assert v.classify_pool(parsed(0, traders=0)) == "kept"
+    assert v.classify_pool(parsed(500, traders=None)) == "unknown"
+
+
+def test_the_real_uniswap_v4_pattern_from_2026_10_09():
+    pools = [parsed(4_318_990, 38_971_336, traders=3, name="cirBTC / USDC"),       # 8 trades from 3 wallets
+             parsed(100_000, 1_000, traders=50, name="DUST / USDC"),               # 100x turnover
+             parsed(200_000, 500_000, traders=80, name="REAL / USDC")]
+    row = v.aggregate(pools, {"d": "Uniswap V4 (Arc)"})[0]
+    assert row["volume_24h_usd"] == 200_000.0 and row["excluded_volume_usd"] == 4_418_990.0
+    assert row["excluded_pools"] == 2 and row["active_pools"] == 1 and row["top_pool_name"] == "REAL / USDC"
+
+
+def test_aggregate_counts_unknown_pools_as_excluded_and_passes_truncation_through():
+    pools = [parsed(300, traders=50, name="P1"), parsed(100, traders=None, name="P2"), parsed(0, traders=0, name="P3")]
+    row = v.aggregate(pools, {"d": "Venue D"}, {"d": {"truncated": True}})[0]
+    assert (row["volume_24h_usd"], row["excluded_volume_usd"], row["excluded_pools"]) == (300.0, 100.0, 1)
+    assert row["truncated"] is True and row["sample_pools"] == 3 and row["name"] == "Venue D" and row["kind"] == "dex"
+
+
+def test_aggregate_includes_scanned_venues_with_no_pools_and_falls_back_to_the_id_for_names():
+    rows = {r["dex_id"]: r for r in v.aggregate([], {}, {"quiet": {"truncated": False}})}
+    assert rows["quiet"]["volume_24h_usd"] == 0.0 and rows["quiet"]["name"] == "quiet" and rows["quiet"]["top_pool_name"] is None
+
+
+def test_thresholds_can_be_overridden_for_the_preview():
+    pools = [parsed(1000, traders=7)]
+    assert v.aggregate(pools, {}, None)[0]["volume_24h_usd"] == 0.0
+    assert v.aggregate(pools, {}, None, min_traders=5)[0]["volume_24h_usd"] == 1000.0
+
+
+# ------------------------------------------------------------------ scanning one venue
+
+def scan(pages, **kw):
     seen = []
-    def fetch(n, key, sort):
-        seen.append((n, sort))
-        return pages_by_number(n, sort)
-    pools, summary = v.collect_pools("KEY", fetch=fetch, **kw)
-    return pools, summary, seen
+    def fetch(dex, n, key, sort):
+        seen.append((dex, n, sort))
+        return pages(n, sort)
+    pools, outcome = v.scan_venue("argus", "KEY", fetch=fetch, **kw)
+    return pools, outcome, seen
 
 
-def test_stops_when_the_volume_tail_reaches_zero_and_counts_as_complete():
-    pools, s, seen = scan(lambda n, sort: (200, page(pool("a", 100), pool("a", 0))) if n == 1 else (200, page(pool("a", 0))))
-    assert s["stopped"] == "volume_tail_reached" and s["complete"] and s["pages"] == 1 and len(seen) == 1
-    assert len(pools) == 2
+def test_a_venue_ends_at_the_volume_tail_on_an_empty_page_or_the_cap():
+    pools, o, seen = scan(lambda n, s: (200, page(pool(100), pool(0))))
+    assert o["status"] == "complete" and not o["truncated"] and o["calls"] == 1 and len(pools) == 2
+    pools, o, _ = scan(lambda n, s: (200, page(pool(5))) if n == 1 else (200, page()))
+    assert o["status"] == "complete" and not o["truncated"] and len(pools) == 1
+    pools, o, seen = scan(lambda n, s: (200, page(pool(50 + n))))
+    assert o["status"] == "complete" and o["truncated"] and o["calls"] == 10 and len(pools) == 10
+    pools, o, _ = scan(lambda n, s: (200, page(pool(50))), max_pages=3)
+    assert o["truncated"] and o["calls"] == 3
 
 
-def test_stops_on_an_empty_page_as_complete():
-    pools, s, _ = scan(lambda n, sort: (200, page(pool("a", 5))) if n == 1 else (200, page()))
-    assert s["stopped"] == "no_more_pools" and s["complete"] and len(pools) == 1
+def test_pools_are_attributed_to_the_venue_being_scanned():
+    pools, _, _ = scan(lambda n, s: (200, page(pool(9))) if n == 1 else (200, page()))
+    assert pools[0]["dex_id"] == "argus"
 
 
-def test_reaches_the_ten_page_cap_as_complete():
-    pools, s, seen = scan(lambda n, sort: (200, page(pool("a", 10 + n))))
-    assert s["stopped"] == "page_cap" and s["complete"] and s["pages"] == 10 and len(seen) == 10 and len(pools) == 10
+def test_rate_limit_and_errors_end_a_venue_scan_unfinished():
+    _, o, _ = scan(lambda n, s: (200, page(pool(5))) if n < 3 else (429, None))
+    assert o["status"] == "rate_limited"
+    _, o, _ = scan(lambda n, s: (500, None))
+    assert o["status"] == "error"
+    _, o, _ = scan(lambda n, s: (200, None))
+    assert o["status"] == "error"
 
 
-def test_rate_limit_error_and_time_budget_are_incomplete():
-    _, s, _ = scan(lambda n, sort: (200, page(pool("a", 5))) if n < 3 else (429, None))
-    assert s["stopped"] == "rate_limited" and not s["complete"]
-    _, s, _ = scan(lambda n, sort: (200, page(pool("a", 5))) if n < 2 else (500, None))
-    assert s["stopped"] == "http_500" and not s["complete"]
-    _, s, _ = scan(lambda n, sort: (0, None))
-    assert s["stopped"] == "http_0" and not s["complete"]
-    now = {"t": 0.0}
-    def fetch(n, key, sort):
-        now["t"] += 40
-        return 200, page(pool("a", 5))
-    _, s = v.collect_pools("KEY", fetch=fetch, clock=lambda: now["t"], budget_seconds=60)
-    assert s["stopped"] == "time_budget" and not s["complete"]
-
-
-def test_if_the_api_rejects_the_sort_parameter_it_retries_unsorted_and_scans_everything():
+def test_if_the_api_rejects_the_sort_parameter_the_venue_is_scanned_unsorted_and_flagged_truncated_at_the_cap():
     def pages(n, sort):
-        if sort:
-            return 400, None
-        return (200, page(pool("a", 0))) if n < 3 else (200, page())     # zero volume must NOT end an unsorted scan
-    pools, s, seen = scan(pages)
-    assert s["sorted"] is False and s["stopped"] == "no_more_pools" and s["complete"] and len(pools) == 2
-    assert seen[0] == (1, v.SORT) and seen[1] == (1, None)
+        return (400, None) if sort else (200, page(pool(0)))        # zero volume must NOT end an unsorted scan
+    pools, o, seen = scan(pages)
+    assert o["calls"] == 11 and o["sorted"] is False and o["truncated"] and len(pools) == 10
+    assert seen[0] == ("argus", 1, v.SORT) and seen[1] == ("argus", 1, None)
 
 
-# ------------------------------------------------------------------ refresh + write guarantee
+# ------------------------------------------------------------------ refresh + write guarantees
 
 class FakeClient:
     def __init__(self): self.upserts = []
@@ -117,37 +157,66 @@ class FakeClient:
         return T()
 
 
-def test_a_complete_scan_is_written_with_names_kinds_and_a_timestamp():
+def names(*ids): return lambda k: (200, {i: i.title() for i in ids})
+
+
+def test_refresh_writes_every_completed_venue_with_filtered_and_excluded_volume():
     client = FakeClient()
-    pages = {1: (200, page(pool("argus", 300, "ARC / USDC"), pool("uniswap-v3-arc", 700)))}
-    s = v.refresh_venues(client, "KEY", fetch_names=lambda k: (200, {"argus": "Argus", "uniswap-v3-arc": "Uniswap V3 (Arc)", "foci": "Foci"}),
-                         fetch_page=lambda n, k, sort: pages.get(n, (200, page())))
+    data = {"argus": [pool(300, 100_000, 30, 30), pool(900, 1_000_000, 1, 1)], "foci": []}
+    s = v.refresh_venues(client, "KEY", fetch_names=names("argus", "foci", "uniswap-v4-arc"),
+                         fetch_page=lambda dex, n, k, sort: (200, page(*data.get(dex, [])) if n == 1 else page()))
     rows, on_conflict = client.upserts[0]
     by = {r["dex_id"]: r for r in rows}
-    assert on_conflict == "dex_id" and set(by) == {"argus", "uniswap-v3-arc", "foci"}
-    assert by["argus"]["kind"] == "launchpad" and by["argus"]["name"] == "Argus" and by["argus"]["volume_24h_usd"] == 300.0
-    assert by["uniswap-v3-arc"]["kind"] == "dex" and by["foci"]["volume_24h_usd"] == 0.0
+    assert on_conflict == "dex_id" and set(by) == {"argus", "foci", "uniswap-v4-arc"}
+    assert by["argus"]["volume_24h_usd"] == 300.0 and by["argus"]["excluded_volume_usd"] == 900.0 and by["argus"]["kind"] == "launchpad"
+    assert by["foci"]["volume_24h_usd"] == 0.0 and by["uniswap-v4-arc"]["volume_24h_usd"] == 0.0
     assert all(r["fetched_at"] for r in rows)
-    assert s["written"] == 3 and s["total_volume_usd"] == 1000.0 and s["pools"] == 2
+    assert (s["written"], s["kept_usd"], s["excluded_usd"], s["stopped"], s["incomplete"]) == (3, 300.0, 900.0, None, [])
 
 
-def test_an_incomplete_scan_writes_nothing_so_old_numbers_are_kept():
+def test_a_failing_venue_is_skipped_and_keeps_its_previous_row_while_the_rest_are_written():
     client = FakeClient()
-    s = v.refresh_venues(client, "KEY", fetch_names=lambda k: (200, {}),
-                         fetch_page=lambda n, k, sort: (200, page(pool("a", 5))) if n == 1 else (429, None))
-    assert client.upserts == [] and s["written"] == 0 and s["stopped"] == "rate_limited"
+    def fetch(dex, n, k, sort):
+        if dex == "bad":
+            return 500, None
+        return (200, page(pool(100))) if n == 1 else (200, page())
+    s = v.refresh_venues(client, "KEY", fetch_names=names("good", "bad"), fetch_page=fetch)
+    assert [r["dex_id"] for r in client.upserts[0][0]] == ["good"] and s["incomplete"] == ["bad"] and s["written"] == 1
 
 
-def test_no_pools_at_all_writes_nothing():
+def test_a_rate_limit_stops_the_run_but_keeps_venues_already_finished():
     client = FakeClient()
-    s = v.refresh_venues(client, "KEY", fetch_names=lambda k: (200, {"a": "A"}), fetch_page=lambda n, k, sort: (200, page()))
-    assert client.upserts == [] and s["written"] == 0
+    def fetch(dex, n, k, sort):
+        if dex == "b":
+            return 429, None
+        return (200, page(pool(10))) if n == 1 else (200, page())
+    s = v.refresh_venues(client, "KEY", fetch_names=names("a", "b", "c"), fetch_page=fetch)
+    assert [r["dex_id"] for r in client.upserts[0][0]] == ["a"] and s["stopped"] == "rate_limited"
 
 
-def test_a_names_failure_only_costs_pretty_names():
+def test_the_time_budget_stops_the_run_between_venues():
     client = FakeClient()
-    v.refresh_venues(client, "KEY", fetch_names=lambda k: (500, {}), fetch_page=lambda n, k, sort: (200, page(pool("a", 5))) if n == 1 else (200, page()))
-    assert client.upserts[0][0][0]["name"] == "a"
+    now = {"t": 0.0}
+    def fetch(dex, n, k, sort):
+        now["t"] += 50
+        return (200, page(pool(10))) if n == 1 else (200, page())
+    s = v.refresh_venues(client, "KEY", fetch_names=names("a", "b", "c", "d"), fetch_page=fetch,
+                         clock=lambda: now["t"], budget_seconds=120)
+    assert s["stopped"] == "time_budget" and 0 < s["written"] < 4
+
+
+def test_no_venue_list_writes_nothing():
+    client = FakeClient()
+    s = v.refresh_venues(client, "KEY", fetch_names=lambda k: (500, {}), fetch_page=lambda *a: (200, page()))
+    assert client.upserts == [] and s["written"] == 0 and s["stopped"] == "venue_list_http_500"
+
+
+def test_a_venue_without_any_transaction_counts_is_refused_not_reported_unfiltered():
+    client = FakeClient()
+    s = v.refresh_venues(client, "KEY", fetch_names=names("argus", "faze"),
+                         fetch_page=lambda dex, n, k, sort: (200, page(pool(500, h24=False)) if dex == "argus" and n == 1
+                                                             else page(pool(500)) if n == 1 else page()))
+    assert [r["dex_id"] for r in client.upserts[0][0]] == ["faze"] and s["incomplete"] == ["argus"]
 
 
 def test_http_helpers_use_the_pro_endpoints_and_map_failures(monkeypatch):
@@ -160,19 +229,20 @@ def test_http_helpers_use_the_pro_endpoints_and_map_failures(monkeypatch):
     monkeypatch.setattr(v.requests, "get", fake_get)
     assert v.fetch_dex_names("KEY") == (200, {"argus": "Argus"})
     assert seen["url"].endswith("/onchain/networks/arc/dexes") and seen["headers"]["x-cg-pro-api-key"] == "KEY"
-    assert v.fetch_pools_page(3, "KEY") == (200, Resp().json())
-    assert seen["url"].endswith("/onchain/networks/arc/pools") and seen["params"] == {"page": 3, "sort": "h24_volume_usd_desc"}
-    assert v.fetch_pools_page(1, "KEY", sort=None)[0] == 200 and seen["params"] == {"page": 1}
+    v.fetch_venue_page("uniswap-v4-arc", 3, "KEY")
+    assert seen["url"].endswith("/onchain/networks/arc/dexes/uniswap-v4-arc/pools") and seen["params"] == {"page": 3, "sort": "h24_volume_usd_desc"}
+    v.fetch_venue_page("argus", 1, "KEY", sort=None)
+    assert seen["params"] == {"page": 1}
     monkeypatch.setattr(v.requests, "get", lambda *a, **k: (_ for _ in ()).throw(v.requests.Timeout("slow")))
-    assert v.fetch_pools_page(1, "KEY") == (0, None)
+    assert v.fetch_venue_page("argus", 1, "KEY") == (0, None)
     class Bad: status_code = 503
     monkeypatch.setattr(v.requests, "get", lambda *a, **k: Bad())
-    assert v.fetch_pools_page(1, "KEY") == (503, None) and v.fetch_dex_names("KEY") == (503, {})
+    assert v.fetch_venue_page("argus", 1, "KEY") == (503, None) and v.fetch_dex_names("KEY") == (503, {})
     class NotJson:
         status_code = 200
         def json(self): raise ValueError("no")
     monkeypatch.setattr(v.requests, "get", lambda *a, **k: NotJson())
-    assert v.fetch_pools_page(1, "KEY") == (200, None)
+    assert v.fetch_venue_page("argus", 1, "KEY") == (200, None)
 
 
 def test_run_skips_quietly_without_a_key(monkeypatch):

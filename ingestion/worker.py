@@ -704,11 +704,13 @@ def _run_venues_safely() -> None:
         print(f"Venues: skipped ({result['skipped']})")
         return
     if not result["written"]:
-        print(f"::warning title=Venue scan incomplete::{result['pages']} pages, {result['pools']} pools, "
-              f"stopped ({result['stopped']}); previous venue numbers kept")
+        print(f"::warning title=Venue scan wrote nothing::{result['calls']} calls, stopped ({result['stopped']}); "
+              f"previous venue numbers kept")
         return
-    print(f"Venues: {result['written']} venues, ${result['total_volume_usd']:,.0f} 24h across "
-          f"{result['pools']} pools in {result['pages']} pages ({result['stopped']}).")
+    print(f"Venues: {result['written']} of {result['venues']} venues, ${result['kept_usd']:,.0f} 24h kept "
+          f"(${result['excluded_usd']:,.0f} excluded as anomalous) from {result['pools']} pools in {result['calls']} calls"
+          + (f", {len(result['incomplete'])} left for next run" if result["incomplete"] else "")
+          + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
 
 
 def main() -> None:

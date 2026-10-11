@@ -187,15 +187,21 @@ def test_venue_crash_does_not_fail_the_job(monkeypatch, capsys):
     assert "::warning title=Venue refresh failed::RuntimeError" in out and "Finished in" in out
 
 
-def test_venue_summaries_for_complete_and_incomplete_scans(monkeypatch, capsys):
+def test_venue_summaries_for_full_partial_and_empty_runs(monkeypatch, capsys):
     monkeypatch.setattr(worker, "run", lambda: None)
     _fake_discovery(monkeypatch, lambda: OK)
-    _fake_venues(monkeypatch, lambda: {"written": 22, "total_volume_usd": 3590000.0, "pools": 200, "pages": 10, "stopped": "page_cap"})
+    full = {"venues": 22, "written": 22, "incomplete": [], "pools": 700, "calls": 60, "kept_usd": 3590000.0,
+            "excluded_usd": 21160000.0, "stopped": None}
+    _fake_venues(monkeypatch, lambda: dict(full))
     worker.main()
-    assert "Venues: 22 venues, $3,590,000 24h across 200 pools in 10 pages (page_cap)." in capsys.readouterr().out
-    _fake_venues(monkeypatch, lambda: {"written": 0, "total_volume_usd": 10.0, "pools": 40, "pages": 3, "stopped": "rate_limited"})
+    assert ("Venues: 22 of 22 venues, $3,590,000 24h kept ($21,160,000 excluded as anomalous) "
+            "from 700 pools in 60 calls.") in capsys.readouterr().out
+    _fake_venues(monkeypatch, lambda: dict(full, written=19, incomplete=["a", "b", "c"], stopped="rate_limited"))
     worker.main()
-    assert "::warning title=Venue scan incomplete::3 pages, 40 pools, stopped (rate_limited); previous venue numbers kept" in capsys.readouterr().out
+    assert ", 3 left for next run, stopped early (rate_limited)." in capsys.readouterr().out
+    _fake_venues(monkeypatch, lambda: dict(full, written=0, stopped="venue_list_http_500"))
+    worker.main()
+    assert "::warning title=Venue scan wrote nothing::60 calls, stopped (venue_list_http_500); previous venue numbers kept" in capsys.readouterr().out
 
 
 def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):
