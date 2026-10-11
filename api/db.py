@@ -82,6 +82,17 @@ def fetch_market_data(client: Client) -> list[dict]:
     )
 
 
+def fetch_venues(client: Client) -> list[dict]:
+    """venue_market_data rows (per-venue 24h volume, GeckoTerminal). Keyset-paginated."""
+    return _fetch_all_pages_keyset(
+        lambda: client.table("venue_market_data").select(
+            "dex_id, name, kind, volume_24h_usd, active_pools, sample_pools, top_pool_name, "
+            "top_pool_volume_usd, source, fetched_at"
+        ),
+        cursor_column="dex_id",
+    )
+
+
 def fetch_holders(client: Client) -> list[dict]:
     """token_holders rows (holder counts from the Arc explorer). Keyset-paginated."""
     return _fetch_all_pages_keyset(

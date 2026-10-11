@@ -32,6 +32,26 @@ class MarketData(BaseModel):
     fetched_at: str
 
 
+class VenueSummary(BaseModel):
+    """24h trading volume of one DEX or launch venue on Arc (GeckoTerminal, third-party).
+
+    Volume is summed over the top `sample_pools` pools by 24h volume network-wide, so a venue with a long
+    tail of tiny pools is slightly understated. `share` is its fraction of the volume of all venues listed.
+    """
+
+    dex_id: str
+    name: str
+    kind: str                      # "dex" | "launchpad"
+    volume_24h_usd: float
+    share: float
+    active_pools: int
+    sample_pools: int
+    top_pool_name: Optional[str] = None
+    top_pool_volume_usd: Optional[float] = None
+    source: str
+    fetched_at: str
+
+
 class ProjectSummary(BaseModel):
     id: str
     name: str

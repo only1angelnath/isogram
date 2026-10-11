@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models import HealthResponse
-from routes import badge, gas, metrics, network, projects, scores, tvl, submit, admin
+from routes import badge, gas, metrics, network, projects, scores, tvl, submit, admin, venues
 
 app = FastAPI(
     title="Isogram API",
@@ -47,6 +47,7 @@ app.include_router(network.router)
 app.include_router(metrics.router)
 app.include_router(submit.router)
 app.include_router(admin.router)
+app.include_router(venues.router)
 
 
 # HEAD is accepted so uptime monitors that probe with HEAD (the usual

@@ -161,6 +161,41 @@ def build_holders(row: Optional[dict], now: Optional[datetime] = None) -> Option
     return count if (now or datetime.now(timezone.utc)) - fetched <= HOLDERS_STALE_AFTER else None
 
 
+VENUE_STALE_AFTER = timedelta(hours=24)    # refreshed hourly; a day-old scan is not "24h volume" any more
+
+
+def build_venues(rows: list[dict], now: Optional[datetime] = None) -> list[dict]:
+    """venue_market_data rows -> API venues: fresh (<= 24h old), with volume, biggest first, each with its
+    share of the volume of all the venues returned. Rows with an unknown kind or unreadable numbers are dropped."""
+    now = now or datetime.now(timezone.utc)
+    kept = []
+    for r in rows or []:
+        fetched = _parse_iso(r.get("fetched_at"))
+        if fetched is not None and fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=timezone.utc)
+        volume = _to_float(r.get("volume_24h_usd"))
+        if fetched is None or now - fetched > VENUE_STALE_AFTER:
+            continue
+        if volume is None or volume <= 0 or r.get("kind") not in ("dex", "launchpad") or not r.get("dex_id"):
+            continue
+        kept.append((r, volume))
+    total = sum(v for _, v in kept)
+    out = [{
+        "dex_id": r["dex_id"],
+        "name": r.get("name") or r["dex_id"],
+        "kind": r["kind"],
+        "volume_24h_usd": volume,
+        "share": volume / total if total else 0.0,
+        "active_pools": int(r.get("active_pools") or 0),
+        "sample_pools": int(r.get("sample_pools") or 0),
+        "top_pool_name": r.get("top_pool_name"),
+        "top_pool_volume_usd": _to_float(r.get("top_pool_volume_usd")),
+        "source": r.get("source") or "geckoterminal",
+        "fetched_at": r["fetched_at"],
+    } for r, volume in kept]
+    return sorted(out, key=lambda v: -v["volume_24h_usd"])
+
+
 def market_by_address(market_rows: list[dict]) -> dict[str, dict]:
     return {(r.get("contract_address") or "").lower(): r for r in market_rows or []}
 
