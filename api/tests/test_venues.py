@@ -17,7 +17,7 @@ NOW = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)
 
 
 def vrow(dex="uniswap-v3-arc", vol="600", kind="dex", hours_old=1, **kw):
-    base = {"dex_id": dex, "name": dex.title(), "kind": kind, "volume_24h_usd": vol, "active_pools": 4, "sample_pools": 200,
+    base = {"dex_id": dex, "name": dex.title(), "kind": kind, "volume_24h_usd": vol, "active_pools": 4, "sample_pools": 200, "excluded_volume_usd": "50", "excluded_pools": 3, "truncated": False,
             "top_pool_name": "A / USDC", "top_pool_volume_usd": "300", "source": "geckoterminal",
             "fetched_at": (NOW - timedelta(hours=hours_old)).isoformat()}
     base.update(kw)
@@ -30,6 +30,19 @@ def test_sorted_by_volume_with_shares_that_sum_to_one():
     assert [round(v["share"], 3) for v in out] == [0.6, 0.3, 0.1]
     assert sum(v["share"] for v in out) == pytest.approx(1.0)
     assert out[1]["kind"] == "launchpad" and out[0]["top_pool_volume_usd"] == 300.0
+
+
+def test_excluded_volume_and_truncation_are_passed_through_and_defaults_are_safe():
+    out = agg.build_venues([vrow("a", "100", excluded_volume_usd="21000000", excluded_pools=89, truncated=True),
+                            vrow("b", "100", excluded_volume_usd=None, excluded_pools=None, truncated=None)], NOW)
+    a, b = {v["dex_id"]: v for v in out}["a"], {v["dex_id"]: v for v in out}["b"]
+    assert (a["excluded_volume_usd"], a["excluded_pools"], a["truncated"]) == (21_000_000.0, 89, True)
+    assert (b["excluded_volume_usd"], b["excluded_pools"], b["truncated"]) == (0.0, 0, False)
+
+
+def test_share_ignores_excluded_volume():
+    out = agg.build_venues([vrow("a", "100", excluded_volume_usd="999999"), vrow("b", "300")], NOW)
+    assert {v["dex_id"]: round(v["share"], 2) for v in out} == {"a": 0.25, "b": 0.75}
 
 
 def test_stale_empty_zero_and_malformed_rows_are_dropped():

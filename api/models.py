@@ -35,8 +35,11 @@ class MarketData(BaseModel):
 class VenueSummary(BaseModel):
     """24h trading volume of one DEX or launch venue on Arc (GeckoTerminal, third-party).
 
-    Volume is summed over the top `sample_pools` pools by 24h volume network-wide, so a venue with a long
-    tail of tiny pools is slightly understated. `share` is its fraction of the volume of all venues listed.
+    Volume is summed over the venue's busiest pools (`sample_pools` scanned) after excluding anomalous pools:
+    pools with fewer than 10 traders in 24h, or whose volume exceeds 25x their reserves. What was excluded is
+    reported in `excluded_volume_usd` / `excluded_pools`, never hidden. `truncated` means the venue had more
+    pools than the scan cap, so its volume is a lower bound. `share` is its fraction of the volume of all
+    venues listed.
     """
 
     dex_id: str
@@ -46,6 +49,9 @@ class VenueSummary(BaseModel):
     share: float
     active_pools: int
     sample_pools: int
+    excluded_volume_usd: float = 0.0
+    excluded_pools: int = 0
+    truncated: bool = False
     top_pool_name: Optional[str] = None
     top_pool_volume_usd: Optional[float] = None
     source: str
