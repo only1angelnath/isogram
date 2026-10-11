@@ -6,7 +6,7 @@ import { VenueSortKey } from "@/lib/venues";
 
 const COLUMNS: { key: VenueSortKey; label: string; title?: string }[] = [
   { key: "kind", label: "type", title: "DEX, or a launch platform (a venue where new tokens are created and first traded)." },
-  { key: "volume", label: "24h volume", title: "Summed over the top pools by 24h volume across Arc (GeckoTerminal, third-party). A venue with a long tail of tiny pools is slightly understated." },
+  { key: "volume", label: "24h volume", title: "Summed over the venue's busiest pools (GeckoTerminal, third-party), after leaving out anomalous pools: fewer than 10 traders in 24h, or volume above 25x reserves. The excluded amount is shown under the figure." },
   { key: "share", label: "share", title: "Fraction of the volume of all venues listed here." },
   { key: "pools", label: "active pools", title: "Pools with trading in the last 24h, among the pools scanned." },
   { key: "top", label: "most traded pool" },
@@ -52,7 +52,17 @@ export function VenueTable({ venues, startRank = 1, sort }: {
                 </span>
               </td>
               <td><span className={`iso-pill${v.kind === "launchpad" ? " good" : ""}`}>{v.kind === "launchpad" ? "launch venue" : "dex"}</span></td>
-              <td className="iso-num" style={{ color: "var(--accent)" }}>{formatUsd(v.volume_24h_usd)}</td>
+              <td className="iso-num" style={{ color: "var(--accent)" }}>
+                <span title={v.truncated ? "Lower bound: this venue has more pools than the scan covers." : undefined}>
+                  {v.truncated ? "≥ " : ""}{formatUsd(v.volume_24h_usd)}
+                </span>
+                {v.excluded_volume_usd > 0 && (
+                  <div className="iso-dim" style={{ fontSize: 11 }}
+                    title={`${v.excluded_pools} pool(s) left out as anomalous: fewer than 10 traders in 24h, or volume above 25x their reserves.`}>
+                    +{formatUsdCompact(v.excluded_volume_usd)} excluded
+                  </div>
+                )}
+              </td>
               <td className="iso-num">{formatPercent(v.share)}</td>
               <td className="iso-num">{v.active_pools.toLocaleString("en-US")}</td>
               <td className="iso-num iso-dim">

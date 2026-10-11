@@ -83,12 +83,15 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   contracts and token; the price, volume and liquidity columns describe the platform's own
   token. Tokens launched through a platform are listed under Tokens, and trading volume per
   venue is third-party data.
-- **Venue volume** (the DEXes page) is third-party too: GeckoTerminal's busiest Arc pools by 24h
-  volume are summed per venue every hour. Uniswap V2, V3 and V4 stay separate venues, as
-  GeckoTerminal and CoinGecko list them. Only a complete scan is stored, so a rate-limited run
-  keeps the previous numbers instead of understating every venue. A venue with a long tail of
-  tiny pools is slightly understated, and venues are listed as DEXes unless confirmed as launch
-  platforms.
+- **Venue volume** (the DEXes page) is third-party too: each Arc venue's busiest pools are read
+  from GeckoTerminal every hour and summed per venue. Uniswap V2, V3 and V4 stay separate venues,
+  as GeckoTerminal and CoinGecko list them. Raw sums are not trustworthy on Arc (one venue summed
+  to $21.7M against $0.4M on CoinGecko because a few pools reported huge volume from two or three
+  wallets), so pools with fewer than 10 traders in 24 hours, or volume above 25 times their
+  reserves, are left out, and the excluded amount is shown next to every venue. CoinGecko's own
+  filter is not public, so totals can differ from theirs. A venue is only updated from a complete
+  scan, and a leading "≥" means it has more pools than the scan covers. Venues are listed as DEXes
+  unless confirmed as launch platforms.
 - **Contract discovery** uses GeckoTerminal and CoinGecko metadata to help identify and
   classify contracts before a human confirms them.
 

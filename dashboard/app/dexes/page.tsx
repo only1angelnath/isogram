@@ -70,10 +70,12 @@ export default async function DexesPage({ searchParams }: {
       )}
 
       <p className="pt-note">
-        Source: GeckoTerminal (via CoinGecko), refreshed hourly{newest ? `, last updated ${formatRelativeAge(newest)}` : ""}. Volume is summed over
-        the busiest pools network-wide ({all[0]?.sample_pools ?? "up to 200"} scanned), so a venue with a long tail of tiny pools is slightly
-        understated. A <b>launch venue</b> is a confirmed launch platform; venues not yet confirmed as launch platforms are listed as DEXes.
-        Click a column to sort.
+        Source: GeckoTerminal (via CoinGecko), refreshed hourly{newest ? `, last updated ${formatRelativeAge(newest)}` : ""}. Each venue&apos;s
+        busiest pools are summed, <b>after leaving out anomalous pools</b>: those with fewer than 10 traders in 24 hours, or whose volume exceeds
+        25&times; their reserves. On Arc a handful of such pools can otherwise report tens of millions of dollars from two or three wallets; the
+        amount left out is shown under each figure, and CoinGecko&apos;s own filter is not public, so totals can differ from theirs. A leading &ldquo;&ge;&rdquo;
+        means the venue has more pools than the scan covers. A <b>launch venue</b> is a confirmed launch platform; venues not yet confirmed
+        as launch platforms are listed as DEXes. Click a column to sort.
       </p>
     </main>
   );

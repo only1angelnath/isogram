@@ -32,8 +32,13 @@ export interface Venue {
   /** Fraction (0-1) of the volume of all venues returned, regardless of any kind filter. */
   share: number;
   active_pools: number;
-  /** Pools scanned network-wide; volume is summed from these only. */
+  /** Pools scanned for this venue; volume is summed from these only. */
   sample_pools: number;
+  /** Volume (and pools) left out as anomalous: < 10 traders, or volume > 25x reserves. Always reported. */
+  excluded_volume_usd: number;
+  excluded_pools: number;
+  /** The venue had more pools than the scan cap, so volume is a lower bound. */
+  truncated: boolean;
   top_pool_name: string | null;
   top_pool_volume_usd: number | null;
   source: string;
