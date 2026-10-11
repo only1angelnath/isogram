@@ -687,6 +687,30 @@ def _run_holders_safely() -> None:
           + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
 
 
+def _run_venues_safely() -> None:
+    """Per-venue volume (GeckoTerminal): same contract as the other optional refreshes - bounded by
+    venues.py itself, any error becomes a ::warning:: and never touches the job result."""
+    try:
+        from venues import run_venues_refresh
+
+        result = run_venues_refresh()
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning title=Venue refresh failed::{type(exc).__name__}: {exc}")
+        return
+    if "skipped" in result:
+        print(f"Venues: skipped ({result['skipped']})")
+        return
+    if not result["written"]:
+        print(f"::warning title=Venue scan incomplete::{result['pages']} pages, {result['pools']} pools, "
+              f"stopped ({result['stopped']}); previous venue numbers kept")
+        return
+    print(f"Venues: {result['written']} venues, ${result['total_volume_usd']:,.0f} 24h across "
+          f"{result['pools']} pools in {result['pages']} pages ({result['stopped']}).")
+
+
 def main() -> None:
     start = time.monotonic()
     try:
@@ -699,6 +723,7 @@ def main() -> None:
     _run_discovery_safely()
     _run_market_data_safely()
     _run_holders_safely()
+    _run_venues_safely()
     print(f"Finished in {time.monotonic() - start:.1f}s")
 
 

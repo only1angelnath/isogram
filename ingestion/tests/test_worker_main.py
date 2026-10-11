@@ -31,6 +31,19 @@ def _no_real_holders(monkeypatch):
     monkeypatch.setitem(sys.modules, "holders", mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_venues(monkeypatch):
+    mod = types.ModuleType("venues")
+    mod.run_venues_refresh = lambda: {"skipped": "stubbed in tests"}
+    monkeypatch.setitem(sys.modules, "venues", mod)
+
+
+def _fake_venues(monkeypatch, behaviour):
+    mod = types.ModuleType("venues")
+    mod.run_venues_refresh = behaviour
+    monkeypatch.setitem(sys.modules, "venues", mod)
+
+
 def _fake_holders(monkeypatch, behaviour):
     mod = types.ModuleType("holders")
     mod.run_holders_refresh = behaviour
@@ -161,6 +174,28 @@ def test_a_market_data_crash_does_not_stop_the_holder_pass(monkeypatch, capsys):
     _fake_holders(monkeypatch, lambda: ran.append(1) or {"due": 0, "calls": 0, "updated": 0, "unindexed": 0, "stopped": None, "targets": 0})
     worker.main()
     assert ran == [1]
+
+
+def test_venue_crash_does_not_fail_the_job(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    def boom():
+        raise RuntimeError("geckoterminal exploded")
+    _fake_venues(monkeypatch, boom)
+    worker.main()
+    out = capsys.readouterr().out
+    assert "::warning title=Venue refresh failed::RuntimeError" in out and "Finished in" in out
+
+
+def test_venue_summaries_for_complete_and_incomplete_scans(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    _fake_venues(monkeypatch, lambda: {"written": 22, "total_volume_usd": 3590000.0, "pools": 200, "pages": 10, "stopped": "page_cap"})
+    worker.main()
+    assert "Venues: 22 venues, $3,590,000 24h across 200 pools in 10 pages (page_cap)." in capsys.readouterr().out
+    _fake_venues(monkeypatch, lambda: {"written": 0, "total_volume_usd": 10.0, "pools": 40, "pages": 3, "stopped": "rate_limited"})
+    worker.main()
+    assert "::warning title=Venue scan incomplete::3 pages, 40 pools, stopped (rate_limited); previous venue numbers kept" in capsys.readouterr().out
 
 
 def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):
