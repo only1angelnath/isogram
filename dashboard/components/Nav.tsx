@@ -13,6 +13,7 @@ export function Nav() {
         <nav className="nav-links">
           <Link href="/network">Arc Overview</Link>
           <Link href="/projects">Projects</Link>
+          <Link href="/dexes">DEXes</Link>
           <Link href="/gas">Gas leaderboard</Link>
         </nav>
         <Link href="/projects" className="btn">

@@ -1,0 +1,67 @@
+import Link from "next/link";
+import { formatPercent, formatUsd, formatUsdCompact } from "@/lib/format";
+import { Query, SortDir, href } from "@/lib/tableState";
+import { Venue } from "@/lib/types";
+import { VenueSortKey } from "@/lib/venues";
+
+const COLUMNS: { key: VenueSortKey; label: string; title?: string }[] = [
+  { key: "kind", label: "type", title: "DEX, or a launch platform (a venue where new tokens are created and first traded)." },
+  { key: "volume", label: "24h volume", title: "Summed over the top pools by 24h volume across Arc (GeckoTerminal, third-party). A venue with a long tail of tiny pools is slightly understated." },
+  { key: "share", label: "share", title: "Fraction of the volume of all venues listed here." },
+  { key: "pools", label: "active pools", title: "Pools with trading in the last 24h, among the pools scanned." },
+  { key: "top", label: "most traded pool" },
+];
+
+function SortTh({ label, colKey, title, sort }: { label: string; colKey: VenueSortKey; title?: string; sort: { basePath: string; query: Query; key: VenueSortKey; dir: SortDir } }) {
+  const active = sort.key === colKey;
+  const nextDir: SortDir = active ? (sort.dir === "desc" ? "asc" : "desc") : colKey === "name" || colKey === "kind" ? "asc" : "desc";
+  return (
+    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"} title={title}>
+      <Link href={href(sort.basePath, { ...sort.query, sort: colKey, dir: nextDir })} className={`iso-sort${active ? " on" : ""}`} prefetch={false}>
+        {label}
+        <span aria-hidden="true">{active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}</span>
+      </Link>
+    </th>
+  );
+}
+
+export function VenueTable({ venues, startRank = 1, sort }: {
+  venues: Venue[];
+  startRank?: number;
+  sort: { basePath: string; query: Query; key: VenueSortKey; dir: SortDir };
+}) {
+  if (venues.length === 0) {
+    return <div className="iso-table-wrap"><div className="iso-dim" style={{ padding: 24 }}>No venues with trading volume in this group right now.</div></div>;
+  }
+  return (
+    <div className="iso-table-wrap">
+      <table className="iso-table">
+        <thead>
+          <tr>
+            <SortTh label="venue" colKey="name" sort={sort} />
+            {COLUMNS.map((c) => <SortTh key={c.key} label={c.label} colKey={c.key} title={c.title} sort={sort} />)}
+          </tr>
+        </thead>
+        <tbody>
+          {venues.map((v, i) => (
+            <tr key={v.dex_id}>
+              <td>
+                <span className="iso-cell-main">
+                  <span className="iso-rank">{startRank + i}</span>
+                  <span>{v.name}</span>
+                </span>
+              </td>
+              <td><span className={`iso-pill${v.kind === "launchpad" ? " good" : ""}`}>{v.kind === "launchpad" ? "launch venue" : "dex"}</span></td>
+              <td className="iso-num" style={{ color: "var(--accent)" }}>{formatUsd(v.volume_24h_usd)}</td>
+              <td className="iso-num">{formatPercent(v.share)}</td>
+              <td className="iso-num">{v.active_pools.toLocaleString("en-US")}</td>
+              <td className="iso-num iso-dim">
+                {v.top_pool_name ? <>{v.top_pool_name} · {formatUsdCompact(v.top_pool_volume_usd)}</> : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}

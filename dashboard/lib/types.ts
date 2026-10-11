@@ -23,6 +23,23 @@ export interface MarketData {
   fetched_at: string;
 }
 
+/** 24h trading volume of one DEX or launch venue on Arc (GeckoTerminal, third-party). */
+export interface Venue {
+  dex_id: string;
+  name: string;
+  kind: "dex" | "launchpad";
+  volume_24h_usd: number;
+  /** Fraction (0-1) of the volume of all venues returned, regardless of any kind filter. */
+  share: number;
+  active_pools: number;
+  /** Pools scanned network-wide; volume is summed from these only. */
+  sample_pools: number;
+  top_pool_name: string | null;
+  top_pool_volume_usd: number | null;
+  source: string;
+  fetched_at: string;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;

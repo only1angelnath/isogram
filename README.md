@@ -83,6 +83,12 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   contracts and token; the price, volume and liquidity columns describe the platform's own
   token. Tokens launched through a platform are listed under Tokens, and trading volume per
   venue is third-party data.
+- **Venue volume** (the DEXes page) is third-party too: GeckoTerminal's busiest Arc pools by 24h
+  volume are summed per venue every hour. Uniswap V2, V3 and V4 stay separate venues, as
+  GeckoTerminal and CoinGecko list them. Only a complete scan is stored, so a rate-limited run
+  keeps the previous numbers instead of understating every venue. A venue with a long tail of
+  tiny pools is slightly understated, and venues are listed as DEXes unless confirmed as launch
+  platforms.
 - **Contract discovery** uses GeckoTerminal and CoinGecko metadata to help identify and
   classify contracts before a human confirms them.
 
@@ -94,6 +100,7 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
 | `GET /metrics/network/daily` | Daily network metrics |
 | `GET /metrics/tokens/daily` | Daily per-token activity |
 | `GET /metrics/contracts/top` | Most active contracts |
+| `GET /venues` | 24h volume per DEX and launch venue (third-party, `?kind=dex` or `launchpad`) |
 | `GET /projects`, `/projects/{id}` | Tracked projects and detail (token and stablecoin projects include a `market` object) |
 | `GET /projects/{id}/daily` | Daily metrics for one project |
 | `GET /gas/top`, `/tvl/top`, `/scores/top` | Leaderboards |

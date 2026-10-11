@@ -20,6 +20,7 @@ import {
   ScorePoint,
   TokenDay,
   TopContract,
+  Venue,
 } from "./types";
 
 function getApiBaseUrl(): string {
@@ -47,6 +48,11 @@ async function getJson<T>(path: string): Promise<T | null> {
     throw new Error(`Isogram API returned ${res.status} for ${path}`);
   }
   return res.json() as Promise<T>;
+}
+
+/** null = the API could not answer (shown as "unavailable"); [] = it answered and there is no volume. */
+export async function listVenues(): Promise<Venue[] | null> {
+  return getJson<Venue[]>("/venues");
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
@@ -110,3 +116,4 @@ export function getApiBaseUrlForBadge(): string {
   // is safe without a NEXT_PUBLIC_ variable.
   return getApiBaseUrl();
 }
+
