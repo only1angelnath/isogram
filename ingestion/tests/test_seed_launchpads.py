@@ -17,6 +17,8 @@ spec.loader.exec_module(sl)
 P8, P7 = sl.ARGUS_PORTALS["#8 (launch portal)"].lower(), sl.ARGUS_PORTALS["#7"].lower()
 FAZE, UBI_REAL = sl.TOKENS["faze"], sl.TOKENS["ubi"]
 UBI_COPY = "0x14c8a4ce07ad3be3b3f2bbbac9732f09ae0f234c"
+FOCI_TOKEN = "0x" + "e" * 40
+FOCI_FACTORY = sl.FOCI["FociLaunchFactory"].lower()
 
 
 def proj(id, name, category, contracts, seeded=False, socials=None):
@@ -33,7 +35,12 @@ def baseline():
             proj("ubi", "UBI", "token", [UBI_REAL]),
             proj("ubi-copy", "UBI.fun on Arc", "token", [UBI_COPY]),
             proj("parabolic", "Parabolic", "token", ["0x" + "9" * 40]),
+            proj("foci-token", "Foci", "token", [FOCI_TOKEN]),
+            proj("foci-factory", "FociLaunchFactory", "infra", [FOCI_FACTORY]),
         ],
+        "token_market_data": [{"contract_address": FOCI_TOKEN, "coingecko_coin_id": "foci"},
+                              {"contract_address": FAZE, "coingecko_coin_id": "faze"},
+                              {"contract_address": UBI_COPY, "coingecko_coin_id": None}],
         "discovered_contracts": [{"id": 1, "promoted_project_id": "argusv5portal"}, {"id": 2, "promoted_project_id": "faze"}],
         "project_scores": [{"id": 1, "project_id": "argusv5portal"}, {"id": 2, "project_id": "faze"}],
         "gas_events": [{"id": 1, "project_id": "argusv4portal7"}],
@@ -102,14 +109,24 @@ def chain(call_overrides=None, no_code=()):
 def by_id(db, pid): return next((p for p in db["projects"] if p["id"] == pid), None)
 
 
+def platform(plan, name):
+    return next((i for i in plan["platforms"] if i["spec"]["name"] == name), None)
+
+
 def test_plan_picks_the_right_projects_and_leaves_copycats_alone():
-    plan = sl.build_plan(baseline()["projects"])
+    db = baseline()
+    plan = sl.build_plan(db["projects"], sl.fetch_coin_index(FakeClient(db)))
     assert sorted(p["id"] for p in plan["tokens"]) == ["faze", "ubi"]
     assert "ubi-copy" not in [p["id"] for p in plan["tokens"]]
-    assert plan["argus"]["contracts"][0] == sl.ARGUS_TOKEN and len(plan["argus"]["contracts"]) == 9   # token + 8 portals
-    assert sorted(r["id"] for r in plan["retire"]) == ["argusv4portal7", "argusv5portal"]
     assert [m[0] for m in plan["missing"]] and "arcstocks" in [m[0] for m in plan["missing"]]
-    assert plan["bullcheese"]["existing"] is None and len(plan["bullcheese"]["contracts"]) == 6
+    argus = platform(plan, "Argus")
+    assert argus["contracts"][0] == sl.ARGUS_TOKEN and len(argus["contracts"]) == 9              # token + 8 portals
+    assert sorted(r["id"] for r in argus["retire"]) == ["argusv4portal7", "argusv5portal"]
+    foci = platform(plan, "Foci")
+    assert foci["main"]["id"] == "foci-token" and foci["token"] == FOCI_TOKEN and len(foci["contracts"]) == 10
+    assert [r["id"] for r in foci["retire"]] == ["foci-factory"]
+    bull = platform(plan, "BullCheese")
+    assert bull["state"] == "new" and bull["token"] is None and len(bull["contracts"]) == 6
     assert [u[0] for u in plan["unmapped"]] == ["Parabolic"]
 
 
@@ -118,7 +135,7 @@ def test_preview_writes_nothing_but_still_validates_on_chain(capsys):
     sl.run(FakeClient(db), apply=False, call=chain())
     assert repr(db) == before
     out = capsys.readouterr().out
-    assert "all have contract code" in out and "PREVIEW ONLY" in out
+    assert "all have contract code" in out and "PREVIEW ONLY" in out and "Foci:" in out
 
 
 def test_apply_makes_the_expected_changes_and_respects_the_trigger_and_foreign_keys():
@@ -133,6 +150,10 @@ def test_apply_makes_the_expected_changes_and_respects_the_trigger_and_foreign_k
     assert db["discovered_contracts"][0]["promoted_project_id"] == "argus"                     # ledger repointed
     assert db["gas_events"][0]["project_id"] == "argus"
     assert [s["project_id"] for s in db["project_scores"]] == ["faze"]                          # stub scores dropped
+    foci = by_id(db, "foci-token")
+    assert foci["category"] == "launchpad" and foci["seeded"] and foci["contracts"][0] == FOCI_TOKEN
+    assert len(foci["contracts"]) == 10 and foci["socials"]["website"] == "https://foci.family/"
+    assert by_id(db, "foci-factory") is None
     bull = by_id(db, "bullcheese")
     assert bull["seeded"] and bull["category"] == "launchpad" and len(bull["contracts"]) == 6
     assert by_id(db, "ubi-copy")["category"] == "token"                                         # copycat untouched
@@ -145,8 +166,8 @@ def test_second_apply_is_a_no_op():
     snapshot = repr(db)
     plan = sl.run(FakeClient(db), apply=True, call=chain())
     assert repr(db) == snapshot
-    assert not plan["tokens"] and plan["argus"] is None and plan["bullcheese"] is None
-    assert {"Faze", "UBI", "Argus", "BullCheese"} <= set(plan["done"])
+    assert not plan["tokens"] and not plan["platforms"]
+    assert {"Faze", "UBI", "Argus", "Foci", "BullCheese"} <= set(plan["done"])
 
 
 def test_a_hand_seeded_project_under_another_category_is_skipped_not_forced():
@@ -160,7 +181,7 @@ def test_a_portal_owned_by_a_seeded_project_is_a_conflict_and_is_left_out():
     db = baseline()
     db["projects"].append(proj("other", "Somebody Else", "infra", [sl.ARGUS_PORTALS["#5"].lower()], seeded=True))
     plan = sl.run(FakeClient(db), apply=True, call=chain())
-    assert (sl.ARGUS_PORTALS["#5"], "Somebody Else") in plan["conflicts"]
+    assert (sl.ARGUS_PORTALS["#5"].lower(), "Somebody Else") in plan["conflicts"]
     assert sl.ARGUS_PORTALS["#5"].lower() not in by_id(db, "argus")["contracts"]
     assert by_id(db, "other")["contracts"] == [sl.ARGUS_PORTALS["#5"].lower()]
 
@@ -170,7 +191,8 @@ def test_a_stub_with_foreign_contracts_is_not_deleted():
     by_id(db, "argusv5portal")["contracts"].append("0x" + "7" * 40)   # stub also owns something else
     plan = sl.run(FakeClient(db), apply=True, call=chain())
     assert by_id(db, "argusv5portal") is not None
-    assert (sl.ARGUS_PORTALS["#8 (launch portal)"], "ArgusV5Portal") in plan["conflicts"]
+    assert (P8, "ArgusV5Portal") in plan["conflicts"]
+    assert P8 not in by_id(db, "argus")["contracts"]
 
 
 def test_legacy_gas_events_failure_stops_loudly_before_argus_is_touched():
@@ -185,12 +207,29 @@ def test_legacy_gas_events_failure_stops_loudly_before_argus_is_touched():
     assert by_id(db, "argus")["category"] == "launchpad" and by_id(db, "bullcheese")
 
 
-def test_missing_argus_token_skips_argus_but_still_does_the_rest():
+def test_untracked_argus_token_still_seeds_the_platform_contracts_without_a_token():
     db = baseline()
     db["projects"] = [p for p in db["projects"] if p["id"] != "argus"]
-    plan = sl.run(FakeClient(db), apply=True, call=chain())
-    assert any(n == "Argus" for n, _ in plan["skipped"])
+    assert "not a tracked project" in platform(sl.build_plan(db["projects"], {}), "Argus")["note"]
+    sl.run(FakeClient(db), apply=True, call=chain())
+    argus = by_id(db, "argus")
+    assert argus["category"] == "launchpad" and len(argus["contracts"]) == 8 and sl.ARGUS_TOKEN not in argus["contracts"]
     assert by_id(db, "bullcheese") is not None and by_id(db, "faze")["category"] == "launchpad"
+
+
+def test_foci_token_is_looked_up_by_coingecko_id_and_only_when_unambiguous():
+    db = baseline()
+    # no contract claims the id -> platform seeded without a token, note explains
+    db["token_market_data"] = [r for r in db["token_market_data"] if r["coingecko_coin_id"] != "foci"]
+    db["projects"] = [p for p in db["projects"] if p["id"] != "foci-token"]
+    plan = sl.build_plan(db["projects"], sl.fetch_coin_index(FakeClient(db)))
+    foci = platform(plan, "Foci")
+    assert foci["token"] is None and foci["state"] == "new" and "no contract has CoinGecko coin id 'foci'" in foci["note"]
+    # two contracts claim it -> refuse to guess
+    db["token_market_data"] += [{"contract_address": "0x" + "1" * 40, "coingecko_coin_id": "foci"},
+                                {"contract_address": "0x" + "2" * 40, "coingecko_coin_id": "foci"}]
+    foci = platform(sl.build_plan(db["projects"], sl.fetch_coin_index(FakeClient(db))), "Foci")
+    assert foci["token"] is None and "2 contracts claim" in foci["note"]
 
 
 def test_refuses_when_an_address_has_no_code_or_the_chain_is_wrong():
@@ -198,6 +237,8 @@ def test_refuses_when_an_address_has_no_code_or_the_chain_is_wrong():
     with pytest.raises(SystemExit):
         sl.run(FakeClient(db), apply=True, call=chain(no_code=[FAZE]))
     assert repr(db) == before                                      # nothing written
+    with pytest.raises(SystemExit):
+        sl.run(FakeClient(db), apply=True, call=chain(no_code=[sl.FOCI["FociMemeHook"]]))   # a Foci contract too
     with pytest.raises(RuntimeError, match="not Arc mainnet"):
         sl.validate_on_chain(sl.all_addresses(), chain({"chain": "0x1"}))
     with pytest.raises(RuntimeError, match="malformed"):

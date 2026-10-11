@@ -7,6 +7,9 @@ Sources of the contract lists, all re-checked on-chain by this script before it 
   - BullCheese: the MintPlus / deployer / locker contracts from its Arc deployment notes. The
     shared Uniswap contracts it touches (V3 factory, position manager, router, Multicall3From)
     are deliberately NOT included: every launch on the chain uses them.
+  - Foci: its nine singleton contracts from foci.family (per-launch curves/tokens and the shared
+    Uniswap v4 contracts are NOT included). Its FOCI token is looked up by CoinGecko coin id
+    'foci' and used only if exactly one contract matches.
   - 11 CoinGecko launchpad tokens, matched by CoinGecko coin id in token_market_data and
     confirmed by on-chain name (2026-10-09). A copycat 'UBI.fun on Arc' shares the UBI symbol;
     only the CoinGecko-matched contract is used.
@@ -51,6 +54,27 @@ BULLCHEESE = {
     "Locker implementation": "0x3C97Ba03df0F6152d2aAcD96d63591819e8440B8",
     "Team Finance locker": "0x154479cA34D77A176E74C038b70df102D9Be9935",
 }
+FOCI = {
+    "FociLaunchFactory": "0xa392D6eca5242715517eeCd43406aeD19424FAC0",
+    "FociLaunchAndBuy": "0x5C5c202271E1300bD5Ce43A4F5C1cEA8efd57B63",
+    "FociMemeHook": "0xF847790B6fA5DA300BB3f56f10d743e71E98e044",
+    "FociFeeEscrow": "0x5a76a44B49ca0f7c4dB181f289C1eCA91d928406",
+    "FociReferralRegistry": "0xe047D0F0ce0dD600732793762B1f1929Adc5015d",
+    "FociLaunchLocker": "0x539fD9e6a6316B65bEd9dDb9A570959e0bc8C31A",
+    "FociLaunchDeployer": "0xa93f9CeFD92A77e1EAffa3246B6F4DB91a5c5659",
+    "FociGraduationExecutor": "0xEB286974C35d2741B0fe9b2a1Cd41E53d06aE406",
+    "FociRewardsDistributorFactory": "0xdac447110867954F00638125bbd5c66D8E0a7195",
+}
+# One entry per launch platform: its project id, its own token (fixed address, or looked up by CoinGecko
+# coin id and used only when EXACTLY ONE contract matches) and the platform contracts (never shared ones).
+PLATFORMS = [
+    {"id": "argus", "name": "Argus", "token": ARGUS_TOKEN, "coin_id": None,
+     "contracts": list(ARGUS_PORTALS.values()), "website": "https://argus.world/"},
+    {"id": "foci", "name": "Foci", "token": None, "coin_id": "foci",
+     "contracts": list(FOCI.values()), "website": "https://foci.family/"},
+    {"id": "bullcheese", "name": "BullCheese", "token": None, "coin_id": None,
+     "contracts": list(BULLCHEESE.values()), "website": "https://bullcheese.fun/"},
+]
 TOKENS = {  # CoinGecko coin id -> contract
     "faze": "0x394d38f807ee0027a182216f5e67a15ae441fa2e",
     "arcstocks": "0x4c9b47dbd5933aa4574b2c27f82419e4dbbd0222",
@@ -65,13 +89,12 @@ TOKENS = {  # CoinGecko coin id -> contract
     "arcstockpad": "0x3dd6db0f20d747e1274839cdd6724cc5df1fb813",
 }
 NOT_YET_MAPPED = ("parabolic", "wonk")   # PARA / WONK: no contract found yet - reported, never guessed
-WEBSITES = {"argus": "https://argus.world/", "bullcheese": "https://bullcheese.fun/"}
 
 _ADDR = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 def all_addresses() -> list:
-    return [ARGUS_TOKEN, *ARGUS_PORTALS.values(), *BULLCHEESE.values(), *TOKENS.values()]
+    return [ARGUS_TOKEN, *ARGUS_PORTALS.values(), *FOCI.values(), *BULLCHEESE.values(), *TOKENS.values()]
 
 
 # ------------------------------------------------------------------ on-chain validation
@@ -107,13 +130,60 @@ def validate_on_chain(addresses: list, call=rpc_call) -> dict:
 
 # ------------------------------------------------------------------ planning (pure)
 
-def build_plan(projects: list) -> dict:
+def resolve_token(platform: dict, coin_index: dict):
+    """(address or None, note). A fixed token wins; otherwise the CoinGecko coin id must match exactly one contract."""
+    if platform["token"]:
+        return platform["token"].lower(), None
+    if not platform["coin_id"]:
+        return None, None
+    found = sorted(set(coin_index.get(platform["coin_id"], [])))
+    if len(found) == 1:
+        return found[0], None
+    if not found:
+        return None, f"no contract has CoinGecko coin id '{platform['coin_id']}' yet; the platform is seeded without a token"
+    return None, f"{len(found)} contracts claim CoinGecko coin id '{platform['coin_id']}' ({', '.join(found)}); seeded without a token"
+
+
+def plan_platform(platform: dict, projects: list, index: dict, coin_index: dict) -> dict:
+    token, note = resolve_token(platform, coin_index)
+    own = [a.lower() for a in platform["contracts"]]
+    own_set = set(own)
+    main = index.get(token) if token else next((p for p in projects if p["id"] == platform["id"]), None)
+    desired = ([token] if token else [])
+    retire, conflicts = [], []
+    for addr in own:
+        other = index.get(addr)
+        if other is not None and (main is None or other["id"] != main["id"]):
+            if not other["seeded"] and all(c.lower() in own_set for c in other["contracts"]):
+                if other["id"] not in {r["id"] for r in retire}:
+                    retire.append(other)
+            else:
+                conflicts.append((addr, other["name"]))
+                continue
+        desired.append(addr)
+    if token and token not in index:
+        note = (note + "; " if note else "") + f"token {token} is not a tracked project, so it is left out"
+        desired.remove(token)
+        token = None
+    state = "new" if main is None else "update"
+    if main is not None and main["seeded"]:
+        have = {c.lower() for c in main["contracts"]}
+        if main["category"] == "launchpad" and have >= set(desired):
+            state = "done"
+        else:
+            state = "skipped"
+            note = (note + "; " if note else "") + "already hand-seeded with a different contract set; change via migration"
+    return {"spec": platform, "main": main, "token": token, "contracts": desired, "retire": retire,
+            "conflicts": conflicts, "state": state, "note": note}
+
+
+def build_plan(projects: list, coin_index: dict | None = None) -> dict:
+    coin_index = coin_index or {}
     index = {}
     for p in projects:
         for a in p.get("contracts") or []:
             index[a.lower()] = p
-    plan = {"tokens": [], "done": [], "skipped": [], "missing": [], "retire": [], "conflicts": [],
-            "argus": None, "bullcheese": None, "unmapped": []}
+    plan = {"tokens": [], "done": [], "skipped": [], "missing": [], "platforms": [], "conflicts": [], "unmapped": []}
 
     for slug, addr in TOKENS.items():
         p = index.get(addr)
@@ -126,36 +196,15 @@ def build_plan(projects: list) -> dict:
         else:
             plan["tokens"].append(p)
 
-    argus = index.get(ARGUS_TOKEN)
-    desired = [ARGUS_TOKEN]
-    for label, portal in ARGUS_PORTALS.items():
-        other = index.get(portal.lower())
-        if other is not None and (argus is None or other["id"] != argus["id"]):
-            if not other["seeded"] and all(c.lower() in {a.lower() for a in ARGUS_PORTALS.values()} for c in other["contracts"]):
-                if other["id"] not in {r["id"] for r in plan["retire"]}:
-                    plan["retire"].append(other)
-            else:
-                plan["conflicts"].append((portal, other["name"]))
-                continue
-        desired.append(portal.lower())
-    if argus is None:
-        plan["skipped"].append(("Argus", f"the ARGUS token {ARGUS_TOKEN} is not a tracked project"))
-    elif argus["seeded"] and argus["category"] == "launchpad" and {c.lower() for c in argus["contracts"]} >= set(desired):
-        plan["done"].append("Argus")
-    elif argus["seeded"]:
-        plan["skipped"].append(("Argus", "already hand-seeded with a different contract set; change via migration"))
-    else:
-        plan["argus"] = {"project": argus, "contracts": desired}
-
-    bc = [a.lower() for a in BULLCHEESE.values()]
-    clash = [(a, index[a]["name"]) for a in bc if a in index and index[a]["id"] != "bullcheese"]
-    plan["conflicts"].extend(clash)
-    bc_ok = [a for a in bc if a not in {c[0] for c in clash}]
-    existing = next((p for p in projects if p["id"] == "bullcheese"), None)
-    if existing and existing["seeded"] and {c.lower() for c in existing["contracts"]} >= set(bc_ok):
-        plan["done"].append("BullCheese")
-    else:
-        plan["bullcheese"] = {"existing": existing, "contracts": bc_ok}
+    for platform in PLATFORMS:
+        item = plan_platform(platform, projects, index, coin_index)
+        plan["conflicts"].extend(item["conflicts"])
+        if item["state"] == "done":
+            plan["done"].append(platform["name"])
+        elif item["state"] == "skipped":
+            plan["skipped"].append((platform["name"], item["note"]))
+        else:
+            plan["platforms"].append(item)
 
     for p in projects:
         n = (p["name"] or "").lower()
@@ -169,20 +218,18 @@ def print_plan(plan: dict, sizes: dict) -> None:
     print(f"launchpad tokens to mark: {len(plan['tokens'])}")
     for p in plan["tokens"]:
         print(f"  {p['name'][:26]:26} {p['category'] or '-':9} -> launchpad   {p['contracts'][0]}  {code(p['contracts'][0])}")
-    if plan["argus"]:
-        a = plan["argus"]
-        print(f"Argus: project '{a['project']['id']}' -> launchpad with {len(a['contracts'])} contracts (token + portals)")
-        for label, portal in ARGUS_PORTALS.items():
-            if portal.lower() in a["contracts"]:
-                print(f"    portal {label:20} {portal}  {code(portal)}")
-    for r in plan["retire"]:
-        print(f"  merge + retire stub project '{r['name']}' ({r['id']}, was {r['category']}) into Argus")
-    if plan["bullcheese"]:
-        b = plan["bullcheese"]
-        print(f"BullCheese: {'update' if b['existing'] else 'create'} project 'bullcheese' with {len(b['contracts'])} contracts")
-        for label, a in BULLCHEESE.items():
-            if a.lower() in b["contracts"]:
-                print(f"    {label:22} {a}  {code(a)}")
+    for item in plan["platforms"]:
+        spec = item["spec"]
+        verb = "create" if item["state"] == "new" else f"update '{item['main']['id']}'"
+        print(f"{spec['name']}: {verb} -> launchpad with {len(item['contracts'])} contracts"
+              + (f", token {item['token']}" if item["token"] else ", no token"))
+        for addr in item["contracts"]:
+            if addr != item["token"]:
+                print(f"    {addr}  {code(addr)}")
+        for r in item["retire"]:
+            print(f"  merge + retire stub project '{r['name']}' ({r['id']}, was {r['category']}) into {spec['name']}")
+        if item["note"]:
+            print(f"  note: {item['note']}")
     if plan["done"]:
         print("already done:", ", ".join(plan["done"]))
     for slug, addr in plan["missing"]:
@@ -212,7 +259,7 @@ def retire_project(client, old_id: str, into_id: str) -> None:
         _upd(client, "gas_events", {"project_id": into_id}, project_id=old_id)
     except Exception as exc:
         # Legacy table. If rows still reference the stub, the delete below fails on the foreign key and
-        # the run stops loudly BEFORE the Argus project is updated, so nothing is left half-merged.
+        # the run stops loudly BEFORE the surviving project is updated, so nothing is left half-merged.
         print(f"  note: gas_events repoint failed ({type(exc).__name__}); the delete will fail if rows remain")
     client.table("project_scores").delete().eq("project_id", old_id).execute()
     client.table("projects").delete().eq("id", old_id).execute()
@@ -223,27 +270,25 @@ def execute(client, plan: dict) -> None:
         _upd(client, "projects", {"category": "launchpad"}, id=p["id"])
         _upd(client, "projects", {"seeded": True}, id=p["id"])
         print(f"  marked {p['name']}")
-    if plan["argus"]:
-        a = plan["argus"]
-        for r in plan["retire"]:
-            retire_project(client, r["id"], a["project"]["id"])
-            print(f"  retired stub {r['name']}")
-        socials = dict(a["project"].get("socials") or {})
-        socials.setdefault("website", WEBSITES["argus"])
-        _upd(client, "projects", {"category": "launchpad", "contracts": a["contracts"], "socials": socials}, id=a["project"]["id"])
-        _upd(client, "projects", {"seeded": True}, id=a["project"]["id"])
-        print("  Argus updated")
-    if plan["bullcheese"]:
-        b = plan["bullcheese"]
-        if b["existing"]:
-            _upd(client, "projects", {"category": "launchpad", "contracts": b["contracts"]}, id="bullcheese")
-            _upd(client, "projects", {"seeded": True}, id="bullcheese")
-        else:
+    for item in plan["platforms"]:
+        spec, main = item["spec"], item["main"]
+        if main is None:
             client.table("projects").insert({
-                "id": "bullcheese", "name": "BullCheese", "category": "launchpad", "contracts": b["contracts"],
-                "socials": {"website": WEBSITES["bullcheese"]}, "seeded": True,
+                "id": spec["id"], "name": spec["name"], "category": "launchpad", "contracts": item["contracts"],
+                "socials": {"website": spec["website"]}, "seeded": True,
             }).execute()
-        print("  BullCheese written")
+            target = spec["id"]
+        else:
+            target = main["id"]
+        for r in item["retire"]:
+            retire_project(client, r["id"], target)
+            print(f"  retired stub {r['name']}")
+        if main is not None:
+            socials = dict(main.get("socials") or {})
+            socials.setdefault("website", spec["website"])
+            _upd(client, "projects", {"category": "launchpad", "contracts": item["contracts"], "socials": socials}, id=target)
+            _upd(client, "projects", {"seeded": True}, id=target)
+        print(f"  {spec['name']} {'created' if main is None else 'updated'}")
 
 
 def fetch_projects(client) -> list:
@@ -259,6 +304,22 @@ def fetch_projects(client) -> list:
         last = page[-1]["id"]
 
 
+def fetch_coin_index(client) -> dict:
+    """{CoinGecko coin id: [contract addresses]} from token_market_data (what GeckoTerminal says each token is)."""
+    index, last = {}, None
+    while True:
+        q = client.table("token_market_data").select("contract_address, coingecko_coin_id")
+        if last is not None:
+            q = q.gt("contract_address", last)
+        page = q.order("contract_address").limit(1000).execute().data or []
+        for row in page:
+            if row.get("coingecko_coin_id"):
+                index.setdefault(row["coingecko_coin_id"], []).append(row["contract_address"].lower())
+        if len(page) < 1000:
+            return index
+        last = page[-1]["contract_address"]
+
+
 def run(client, apply: bool, call=rpc_call) -> dict:
     sizes = validate_on_chain(all_addresses(), call)
     empty = [a for a, n in sizes.items() if n == 0]
@@ -266,7 +327,7 @@ def run(client, apply: bool, call=rpc_call) -> dict:
         print("NO CODE on Arc for:", *empty, sep="\n  ")
         raise SystemExit("refusing to continue: every address must have contract code on Arc (re-run if the RPC was flaky)")
     print(f"on-chain check: {len(sizes)} addresses, all have contract code on chain {CHAIN_ID}\n")
-    plan = build_plan(fetch_projects(client))
+    plan = build_plan(fetch_projects(client), fetch_coin_index(client))
     print_plan(plan, sizes)
     if not apply:
         print("\nPREVIEW ONLY - nothing written. Re-run with --apply to make the change.")
