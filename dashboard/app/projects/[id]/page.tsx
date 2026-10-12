@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getNetworkDaily, getProject, getProjectDaily, getScoreHistory } from "@/lib/api";
 import { InteractiveChart } from "@/components/InteractiveChart";
@@ -15,6 +16,12 @@ interface ProjectPageProps {
 }
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: ProjectPageProps): Promise<Metadata> {
+  const { id } = await params;
+  const project = await getProject(id).catch(() => null);
+  return { title: project ? project.name : "Project" };
+}
 
 const EXPLORER = "https://explorer.arc.io/address/";
 
@@ -57,48 +64,35 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
   stats.push({ label: "failed tx rate (7d)", value: formatPercent(project.failed_rate_7d), tone: failedTone(project.failed_rate_7d) });
 
   return (
-    <main className="container section">
-      <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)", marginBottom: 24 }}>
-        <Link href={`/projects?segment=${cfg.id}`}>← {cfg.label.toLowerCase()}</Link>
+    <main className="container section first">
+      <p className="crumb">
+        <Link href={`/projects?segment=${cfg.id}`}>← {cfg.label}</Link>
       </p>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 24, marginBottom: 12, flexWrap: "wrap" }}>
+      <div className="detail-head">
         {cfg.showsScore && <ScoreGauge score={project.score} />}
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Avatar name={project.name} />
-          <div>
-            <div style={{ marginBottom: 6 }}>
-              <span className="iso-pill">{project.category ?? "unclassified"}</span>{" "}
-              <span className="iso-pill">{cfg.short}</span>{" "}
-              {project.tier === "curated" && <span className="iso-pill good">verified</span>}
-            </div>
-            <h1 style={{ fontSize: 32 }}>{project.name}</h1>
+        <Avatar name={project.name} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ marginBottom: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <span className="iso-pill">{project.category ?? "unclassified"}</span>
+            {project.tier === "curated" ? (
+              <span className="iso-pill good">verified</span>
+            ) : (
+              <span className="iso-pill dashed" title="Found automatically. The name comes from public on-chain metadata and is not an endorsement.">auto-discovered</span>
+            )}
           </div>
+          <h1>{project.name}</h1>
         </div>
       </div>
 
-      <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)", marginBottom: (project.socials ?? []).length > 0 ? 12 : 28 }}>
-        added {formatRelativeAge(project.created_at)} · last measured {formatRelativeAge(project.computed_at)}
-      </p>
+      <p className="meta">added {formatRelativeAge(project.created_at)} · measured {formatRelativeAge(project.computed_at)}</p>
       {(project.socials ?? []).length > 0 && (
-        <div style={{ marginBottom: 28 }}>
+        <div style={{ marginBottom: 24 }}>
           <SocialLinks links={project.socials} />
-          {(project.socials ?? []).some((l) => !l.curated) && (
-            <span className="mono iso-dim" style={{ fontSize: 11, marginLeft: 10 }}>
-              links in grey were registered by the token&apos;s deployer and are not verified
-            </span>
-          )}
         </div>
       )}
 
-      {project.tier === "discovered" && (
-        <p className="pt-note" style={{ marginBottom: 24 }}>
-          Auto-discovered, not hand-verified. The name comes from public on-chain metadata and is not an
-          endorsement or confirmation of who operates this contract.
-        </p>
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16, marginBottom: 32 }}>
+      <div className="stat-grid">
         {stats.map((s) => (
           <div key={s.label} className="stat-panel">
             <div className="value mono">{s.tone !== undefined && s.tone !== "" ? <span className={`iso-pill ${s.tone}`} style={{ fontSize: 14 }}>{s.value}</span> : s.value}</div>
@@ -107,86 +101,70 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
         ))}
       </div>
 
-      {!cfg.showsTvl && (
-        <p className="pt-note" style={{ marginBottom: 24 }}>
-          {cfg.label} are measured by usage, not value locked, so there is no TVL or score for this project.
-        </p>
-      )}
-
       {isPriced && (
-        <div className="panel" style={{ padding: 20, marginBottom: 32 }}>
-          <div style={{ fontWeight: 600, marginBottom: 12 }}>
-            Market data <span className="iso-pill" style={{ marginLeft: 8 }}>third-party · GeckoTerminal</span>
+        <div className="panel" style={{ padding: 18, marginBottom: 28 }}>
+          <div style={{ fontWeight: 600, marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            Market <span className="iso-pill" title="Price data comes from GeckoTerminal, not from the chain.">third-party</span>
+            {market?.quality === "thin" && <span className="iso-pill warn" title="Under $10,000 of liquidity: the price is easy to move, so FDV is not shown.">thin liquidity</span>}
+            {market?.quality === "inactive" && <span className="iso-pill warn" title="Liquidity exists but almost nothing traded in 24h: the price may be stale, so FDV is not shown.">no trading</span>}
           </div>
           {market ? (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, marginBottom: 12 }}>
+              <div className="stat-grid" style={{ marginBottom: 12 }}>
                 <div className="stat-panel"><div className="value mono">{formatPrice(market.price_usd)}</div><div className="label">price{market.price_change_24h_pct != null && <span style={{ color: market.price_change_24h_pct > 0 ? "#5FC9C0" : market.price_change_24h_pct < 0 ? "#FF5B2E" : undefined }}> · {formatChange(market.price_change_24h_pct)} 24h</span>}</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.fdv_usd)}</div><div className="label">fdv</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.liquidity_usd)}</div><div className="label">liquidity</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.volume_24h_usd)}</div><div className="label">volume (24h)</div></div>
                 <div className="stat-panel" title="Last 7 UTC days in the token's most liquid pool only; can understate tokens that trade in several pools."><div className="value mono">{formatUsdCompact(market.volume_7d_usd ?? null)}</div><div className="label">volume (7d, top pool)</div></div>
               </div>
-              {market.quality === "thin" && (
-                <p className="pt-note" style={{ marginBottom: 8 }}>Liquidity is under $10,000, so this price is easy to move and FDV is not shown.</p>
-              )}
-              {market.quality === "inactive" && (
-                <p className="pt-note" style={{ marginBottom: 8 }}>There is liquidity but almost no trading in the last 24 hours, so this price may be stale and FDV is not shown.</p>
-              )}
-              <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)" }}>
-                updated {formatRelativeAge(market.fetched_at)} ·{" "}
-                {market.listed_on_coingecko ? "mapped to a CoinGecko listing" : "not CoinGecko-listed: the price comes from a DEX pool and is unverified"}
+              <p className="meta" style={{ margin: 0 }}>
+                updated {formatRelativeAge(market.fetched_at)} · {market.listed_on_coingecko ? "CoinGecko-listed" : "DEX price, not verified"}
               </p>
             </>
           ) : (
-            <p className="no-data">
-              No market data. GeckoTerminal does not index a trading pool for this token, or its last refresh is more than a day old.
-            </p>
+            <p className="no-data" style={{ margin: 0 }}>No market data: no trading pool is indexed for this token, or the last refresh is over a day old.</p>
           )}
         </div>
       )}
 
       {cfg.showsScore && project.score === null && (
-        <p className="no-data" style={{ marginBottom: 32 }}>
-          This project hasn&apos;t been scored yet — either it was just added, or the chain is still too young
-          for a meaningful reading. Check back after the next scoring run.
-        </p>
+        <p className="notice">Not scored yet. Scores refresh every four hours.</p>
       )}
 
       {daily.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 360px), 1fr))", gap: 16, marginBottom: 32 }}>
-          <div className="panel" style={{ padding: 18 }}>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>Transactions</div>
-            <InteractiveChart kind="bar" points={txPts} format="count" yTitle="transactions per day" ariaLabel="Transactions per day" height={160} />
+        <div className="grid-charts" style={{ marginBottom: 28 }}>
+          <div className="panel chart-card">
+            <div className="hd"><b>Transactions</b></div>
+            <InteractiveChart kind="bar" points={txPts} format="count" ariaLabel="Transactions per day" height={160} />
           </div>
-          <div className="panel" style={{ padding: 18 }}>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>USDC gas</div>
-            <InteractiveChart kind="line" points={gasPts} format="usd4" color="var(--data-2)" yTitle="USDC gas per day" ariaLabel="USDC gas per day" height={160} />
+          <div className="panel chart-card">
+            <div className="hd"><b>USDC gas</b></div>
+            <InteractiveChart kind="line" points={gasPts} format="usd4" color="var(--data-2)" ariaLabel="USDC gas per day" height={160} />
           </div>
-          <div className="panel" style={{ padding: 18 }}>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>Unique users</div>
-            <InteractiveChart kind="line" points={userPts} format="count" yTitle="distinct senders per day" ariaLabel="Unique users per day" height={160} />
+          <div className="panel chart-card">
+            <div className="hd"><b>Unique users</b></div>
+            <InteractiveChart kind="line" points={userPts} format="count" ariaLabel="Unique users per day" height={160} />
           </div>
           {cfg.showsScore && scorePts.length > 1 && (
-            <div className="panel" style={{ padding: 18 }}>
-              <div style={{ fontWeight: 600, marginBottom: 12 }}>Arc Native Score</div>
-              <InteractiveChart kind="line" points={scorePts} format="score" yTitle="score over time" ariaLabel="Arc Native Score over time" height={160} />
+            <div className="panel chart-card">
+              <div className="hd"><b>Arc Native Score</b></div>
+              <InteractiveChart kind="line" points={scorePts} format="score" ariaLabel="Arc Native Score over time" height={160} />
             </div>
           )}
         </div>
       )}
 
       {cfg.showsScore && (
-        <div className="panel" style={{ padding: 24, marginBottom: 32 }}>
+        <div className="panel" style={{ padding: 20, marginBottom: 28 }}>
           <ScoreBadge projectId={project.id} projectName={project.name} />
         </div>
       )}
 
       <div>
-        <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)", marginBottom: 8 }}>tracked contracts</p>
-        <ul style={{ margin: 0, paddingLeft: 20 }}>
+        <p className="meta" style={{ marginBottom: 8 }}>contracts</p>
+        <ul className="contracts">
           {project.contracts.map((address) => (
-            <li key={address} className="mono" style={{ fontSize: "0.85rem", marginBottom: 4 }}>
+            <li key={address}>
               <a href={`${EXPLORER}${address}`} target="_blank" rel="noreferrer">{address} ↗</a>
             </li>
           ))}
@@ -195,4 +173,3 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
     </main>
   );
 }
-

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { listVenues } from "@/lib/api";
 import { VenueTable } from "@/components/VenueTable";
 import { Pagination } from "@/components/Pagination";
@@ -7,6 +8,7 @@ import { firstParam, paginate, parsePage, parseSort } from "@/lib/tableState";
 import { VENUE_SORT_KEYS, VenueKind, VenueSortKey, filterVenues, parseKind, sortVenues, totalVolume } from "@/lib/venues";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "DEXes" };
 
 const KINDS: { id: VenueKind; label: string }[] = [
   { id: "all", label: "All venues" },
@@ -30,29 +32,28 @@ export default async function DexesPage({ searchParams }: {
   const newest = all.map((v) => v.fetched_at).sort().pop() ?? null;
 
   return (
-    <main className="container section">
-      <div className="eyebrow">DEXES &amp; LAUNCH VENUES</div>
-      <h2 style={{ fontSize: 32, marginBottom: 12 }}>Where trading happens on Arc.</h2>
-      <p className="lede">
-        24-hour trading volume for every DEX and launch platform with activity. Uniswap V2, V3 and V4 are listed
-        separately, as GeckoTerminal and CoinGecko list them. This is third-party market data, not read from the chain.
-      </p>
+    <main className="container section first">
+      <div className="page-head">
+        <div className="eyebrow">DEXes</div>
+        <h1>Where trading happens on Arc.</h1>
+        <p className="lede">24h volume for every DEX and launch platform with activity. Third-party data, not read from the chain.</p>
+      </div>
 
-      <div className="iso-cards" style={{ marginTop: 28 }}>
-        {KINDS.map((k, i) => {
+      <div className="iso-cards compact">
+        {KINDS.map((k) => {
           const items = filterVenues(all, k.id);
           return (
-            <Link key={k.id} href={k.id === "all" ? "/dexes" : `/dexes?kind=${k.id}`} className="iso-card" aria-current={k.id === kind ? "page" : undefined} style={{ animationDelay: `${i * 60}ms` }}>
+            <Link key={k.id} href={k.id === "all" ? "/dexes" : `/dexes?kind=${k.id}`} className="iso-card" aria-current={k.id === kind ? "page" : undefined}>
               <div className="k">{k.label}</div>
               <div className="big">{formatUsdCompact(totalVolume(items))}</div>
-              <div className="sub">{items.length} venues · 24h volume</div>
+              <div className="sub">{items.length} venues</div>
             </Link>
           );
         })}
       </div>
 
       {venues === null ? (
-        <div className="iso-table-wrap"><div className="iso-dim" style={{ padding: 24 }}>Venue data is temporarily unavailable. The rest of the dashboard is unaffected; try again in a minute.</div></div>
+        <div className="iso-table-wrap"><div className="iso-dim" style={{ padding: 24 }}>Venue data is temporarily unavailable. Try again in a minute.</div></div>
       ) : (
         <>
           <VenueTable
@@ -70,12 +71,8 @@ export default async function DexesPage({ searchParams }: {
       )}
 
       <p className="pt-note">
-        Source: GeckoTerminal (via CoinGecko), refreshed hourly{newest ? `, last updated ${formatRelativeAge(newest)}` : ""}. Each venue&apos;s
-        busiest pools are summed, <b>after leaving out anomalous pools</b>: those with fewer than 10 traders in 24 hours, or whose volume exceeds
-        25&times; their reserves. On Arc a handful of such pools can otherwise report tens of millions of dollars from two or three wallets; the
-        amount left out is shown under each figure, and CoinGecko&apos;s own filter is not public, so totals can differ from theirs. A leading &ldquo;&ge;&rdquo;
-        means the venue has more pools than the scan covers. A <b>launch venue</b> is a confirmed launch platform; venues not yet confirmed
-        as launch platforms are listed as DEXes. Click a column to sort.
+        GeckoTerminal, refreshed hourly{newest ? `, updated ${formatRelativeAge(newest)}` : ""}. Anomalous pools are left out and shown as &ldquo;excluded&rdquo;;
+        &ldquo;&ge;&rdquo; marks a lower bound. <Link href="/methodology#venues">Details</Link>
       </p>
     </main>
   );

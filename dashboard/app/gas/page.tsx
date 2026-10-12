@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { getNetworkDaily, listProjects } from "@/lib/api";
 import { SegmentTable } from "@/components/SegmentTable";
 import { Pagination } from "@/components/Pagination";
@@ -8,6 +9,7 @@ import { paginate, parsePage, parseSort } from "@/lib/tableState";
 import { formatCount, formatPercent, formatUsd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Gas leaderboard" };
 
 // The gas leaderboard shows only projects that actually consumed gas: gas is paid by whoever
 // CALLS a contract, so a token nobody transacted with, or a contract that is only ever read,
@@ -46,18 +48,17 @@ export default async function GasLeaderboardPage({ searchParams }: {
   const attributed = payers.reduce((s, p) => s + (p.usdc_gas_7d ?? 0), 0);
 
   return (
-    <main className="container section">
-      <div className="eyebrow">GAS LEADERBOARD</div>
-      <h2 style={{ fontSize: 32, marginBottom: 12 }}>Who is burning the most USDC gas.</h2>
-      <p className="lede">
-        Trailing 7 days. USDC is Arc&apos;s native gas asset, so this is Arc-native activity, not a proxy
-        for it. Gas is paid by the people <i>calling</i> a contract — only {payers.length} of {all.length} tracked
-        projects were called at all, and tokens, launchpads and infrastructure use gas very differently,
-        so use the filters.
-        {networkGas !== null && networkGas > 0 && <> Together they account for <b>{formatPercent(attributed / networkGas, 0)}</b> of all network gas.</>}
-      </p>
+    <main className="container section first">
+      <div className="page-head">
+        <div className="eyebrow">Gas leaderboard</div>
+        <h1>Who is burning the most USDC gas.</h1>
+        <p className="lede">
+          Last 7 days. Gas is paid by whoever calls a contract, so only {payers.length} of {all.length} tracked projects appear here
+          {networkGas !== null && networkGas > 0 && <>, together <b>{formatPercent(attributed / networkGas, 0)}</b> of all network gas</>}.
+        </p>
+      </div>
 
-      <div className="iso-tabs" style={{ marginTop: 22 }}>
+      <div className="iso-tabs">
         <Link href="/gas" className="iso-tab" aria-current={!segment || !counts.some((c) => c.s.id === segment) ? "page" : undefined}>All<small>{payers.length}</small></Link>
         {counts.map(({ s, n }) => (
           <Link key={s.id} href={`/gas?segment=${s.id}`} className="iso-tab" aria-current={segment === s.id ? "page" : undefined}>{s.short}<small>{n}</small></Link>
@@ -72,7 +73,7 @@ export default async function GasLeaderboardPage({ searchParams }: {
             {podium.map((p, i) => {
               const share = networkGas && p.usdc_gas_7d ? p.usdc_gas_7d / networkGas : null;
               return (
-                <Link key={p.id} href={`/projects/${p.id}`} className="iso-card" style={{ animationDelay: `${i * 90}ms` }}>
+                <Link key={p.id} href={`/projects/${p.id}`} className="iso-card">
                   <div className="place">#{i + 1}</div>
                   <div className="nm" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <Avatar name={p.name} />
@@ -98,4 +99,3 @@ export default async function GasLeaderboardPage({ searchParams }: {
     </main>
   );
 }
-
