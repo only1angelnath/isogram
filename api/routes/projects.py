@@ -13,6 +13,8 @@ from db import (
     fetch_all_latest_scores,
     fetch_holders,
     fetch_holders_for_address,
+    fetch_socials,
+    fetch_socials_for_address,
     fetch_latest_scores_for_project,
     fetch_market_data,
     fetch_market_for_address,
@@ -56,6 +58,26 @@ def _holders_row(client, project: dict):
         return None
 
 
+def _socials_rows(client) -> list[dict]:
+    """Self-reported links are optional garnish: never let their table take /projects down."""
+    try:
+        return fetch_socials(client)
+    except Exception:
+        log.exception("social links unavailable; serving projects without them")
+        return []
+
+
+def _socials_row(client, project: dict):
+    address = primary_contract(project)
+    if not address:
+        return None
+    try:
+        return fetch_socials_for_address(client, address)
+    except Exception:
+        log.exception("social links unavailable for %s", address)
+        return None
+
+
 def _market_row(client, project: dict):
     address = primary_contract(project)
     if not address:
@@ -73,7 +95,8 @@ def list_projects(client=Depends(get_client)):
     market data for token and stablecoin projects)."""
     projects = fetch_projects(client)
     scores = fetch_all_latest_scores(client)
-    return build_all_summaries(projects, scores, _market_rows(client), holders_rows=_holders_rows(client))
+    return build_all_summaries(projects, scores, _market_rows(client), holders_rows=_holders_rows(client),
+                               socials_rows=_socials_rows(client))
 
 
 @router.get("/{project_id}", response_model=ProjectDetail)
@@ -86,7 +109,8 @@ def get_project(project_id: str, client=Depends(get_client)):
     scores = fetch_latest_scores_for_project(client, project_id)
     score_row = latest_score_by_project(scores).get(project_id)
     summary = build_project_summary(project, score_row, _market_row(client, project),
-                                    holders_row=_holders_row(client, project))
+                                    holders_row=_holders_row(client, project),
+                                    socials_row=_socials_row(client, project))
     return {
         **summary,
         "contracts": project.get("contracts") or [],

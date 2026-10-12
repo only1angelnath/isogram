@@ -88,6 +88,15 @@ def test_7d_volume_older_than_48_hours_or_untimed_is_unknown_not_stale_data():
     assert agg.build_market(row(volume_7d_usd=None), NOW)["volume_7d_usd"] is None
 
 
+def test_price_change_is_signed_shown_at_every_quality_and_unknown_when_missing_or_junk():
+    assert agg.build_market(row(price_change_24h_pct="-11.896"), NOW)["price_change_24h_pct"] == pytest.approx(-11.896)
+    assert agg.build_market(row(price_change_24h_pct=19.6, liquidity_usd="500"), NOW)["price_change_24h_pct"] == pytest.approx(19.6)   # thin
+    assert agg.build_market(row(price_change_24h_pct="0"), NOW)["price_change_24h_pct"] == 0.0
+    for junk in (None, "abc", "NaN", "Infinity", "-Infinity"):
+        assert agg.build_market(row(price_change_24h_pct=junk), NOW)["price_change_24h_pct"] is None
+    assert agg.build_market(row(), NOW)["price_change_24h_pct"] is None            # column absent / never set
+
+
 def test_zero_7d_volume_is_a_real_zero():
     assert agg.build_market(row(volume_7d_usd="0"), NOW)["volume_7d_usd"] == 0.0
 

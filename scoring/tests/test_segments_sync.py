@@ -22,7 +22,12 @@ API_AGGREGATE = Path(__file__).resolve().parents[2] / "api" / "aggregate.py"
 def test_segment_tables_are_identical():
     spec = importlib.util.spec_from_file_location("api_aggregate_for_sync_test", API_AGGREGATE)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    api_dir = str(API_AGGREGATE.parent)          # aggregate.py imports its sibling social_links module
+    sys.path.insert(0, api_dir)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(api_dir)
     assert mod.SEGMENT_BY_CATEGORY == segments.SEGMENT_BY_CATEGORY
 
 
@@ -30,3 +35,4 @@ def test_only_defi_is_scored_and_gets_tvl():
     assert segments.SCORED_SEGMENTS == {"defi"} and segments.TVL_SEGMENTS == {"defi"}
     assert segments.segment_for("DEX") == "defi" and segments.segment_for(None) == "other"
     assert segments.segment_for("something-new") == "other"
+

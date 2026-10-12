@@ -65,13 +65,13 @@ def _utc_today():
 def fetch_projects(client: Client) -> list[dict]:
     """Every tracked project. Keyset-paginated: discovery adds dozens per run."""
     return _fetch_all_pages_keyset(
-        lambda: client.table("projects").select("id, name, category, contracts, created_at, seeded"),
+        lambda: client.table("projects").select("id, name, category, contracts, created_at, seeded, socials"),
         cursor_column="id",
     )
 
 
 MARKET_COLUMNS = ("contract_address, price_usd, fdv_usd, market_cap_usd, liquidity_usd, "
-                  "volume_24h_usd, volume_7d_usd, volume_7d_fetched_at, coingecko_coin_id, source, fetched_at")
+                  "volume_24h_usd, price_change_24h_pct, volume_7d_usd, volume_7d_fetched_at, coingecko_coin_id, source, fetched_at")
 
 
 def fetch_market_data(client: Client) -> list[dict]:
@@ -91,6 +91,25 @@ def fetch_venues(client: Client) -> list[dict]:
         ),
         cursor_column="dex_id",
     )
+
+
+def fetch_socials(client: Client) -> list[dict]:
+    """token_socials rows (self-reported links from GeckoTerminal). Keyset-paginated."""
+    return _fetch_all_pages_keyset(
+        lambda: client.table("token_socials").select("contract_address, website, twitter, telegram, discord, source, fetched_at"),
+        cursor_column="contract_address",
+    )
+
+
+def fetch_socials_for_address(client: Client, address: str) -> dict | None:
+    result = (
+        client.table("token_socials")
+        .select("contract_address, website, twitter, telegram, discord, source, fetched_at")
+        .eq("contract_address", address.lower())
+        .limit(1)
+        .execute()
+    )
+    return (result.data or [None])[0]
 
 
 def fetch_holders(client: Client) -> list[dict]:
@@ -126,7 +145,7 @@ def fetch_market_for_address(client: Client, address: str) -> dict | None:
 def fetch_project(client: Client, project_id: str) -> dict | None:
     result = (
         client.table("projects")
-        .select("id, name, category, contracts, created_at, seeded")
+        .select("id, name, category, contracts, created_at, seeded, socials")
         .eq("id", project_id)
         .limit(1)
         .execute()

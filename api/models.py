@@ -23,6 +23,9 @@ class MarketData(BaseModel):
     market_cap_usd: Optional[float] = None
     liquidity_usd: Optional[float] = None
     volume_24h_usd: Optional[float] = None
+    # 24h price change in percent (signed), from the token's most liquid pool and only when the token is that
+    # pool's base token; None = unknown. Shown for every quality level (it is an observation, like volume).
+    price_change_24h_pct: Optional[float] = None
     # Sum of the last 7 UTC days in the token's MOST LIQUID pool only (can understate tokens that
     # trade in several pools); refreshed on a slower schedule than the rest. None when unknown/stale.
     volume_7d_usd: Optional[float] = None
@@ -58,6 +61,15 @@ class VenueSummary(BaseModel):
     fetched_at: str
 
 
+class SocialLink(BaseModel):
+    """A validated link (see socials.py). curated=False means the token's deployer registered it with
+    GeckoTerminal: unverified, and the UI must say so."""
+
+    kind: str          # website | x | telegram | discord | github
+    url: str
+    curated: bool = False
+
+
 class ProjectSummary(BaseModel):
     id: str
     name: str
@@ -78,6 +90,8 @@ class ProjectSummary(BaseModel):
     # Addresses holding the token (Arc explorer), token / stablecoin / launchpad-token projects only.
     # None = unknown (not indexed as a token, or older than 72h).
     holders: Optional[int] = None
+    # Validated links: curated (hand-set, seeded projects) first, else self-reported (token projects).
+    socials: list[SocialLink] = []
 
 
 class ProjectDetail(ProjectSummary):

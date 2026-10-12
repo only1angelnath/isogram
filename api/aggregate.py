@@ -14,6 +14,7 @@ import html
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Optional
+from social_links import build_socials
 
 # Category -> segment. MUST match scoring/segments.py (tests/test_segments_sync.py in scoring/
 # fails on drift). A segment decides which metrics make sense for a project
@@ -120,6 +121,9 @@ def build_market(row: Optional[dict], now: Optional[datetime] = None) -> Optiona
     else:
         quality = "ok"
     ok = quality == "ok"
+    change = _to_float(row.get("price_change_24h_pct"))
+    if change is not None and (change != change or abs(change) == float("inf")):
+        change = None
     volume_7d = _to_float(row.get("volume_7d_usd"))
     vol7_fetched = _parse_iso(row.get("volume_7d_fetched_at"))
     if vol7_fetched is not None and vol7_fetched.tzinfo is None:
@@ -132,6 +136,7 @@ def build_market(row: Optional[dict], now: Optional[datetime] = None) -> Optiona
         "market_cap_usd": _to_float(row.get("market_cap_usd")) if ok else None,
         "liquidity_usd": liquidity,
         "volume_24h_usd": volume,
+        "price_change_24h_pct": change,
         "volume_7d_usd": volume_7d,
         "quality": quality,
         "listed_on_coingecko": bool((row.get("coingecko_coin_id") or "").strip()),
@@ -204,7 +209,8 @@ def market_by_address(market_rows: list[dict]) -> dict[str, dict]:
 
 
 def build_project_summary(project: dict, score_row: Optional[dict], market_row: Optional[dict] = None,
-                          now: Optional[datetime] = None, holders_row: Optional[dict] = None) -> dict:
+                          now: Optional[datetime] = None, holders_row: Optional[dict] = None,
+                          socials_row: Optional[dict] = None) -> dict:
     """
     Merge a `projects` row with its latest `project_scores` row (if any) into
     one API-facing dict. A project with no score yet (brand new, or the
@@ -240,6 +246,7 @@ def build_project_summary(project: dict, score_row: Optional[dict], market_row: 
         "computed_at": score_row.get("computed_at") if score_row else None,
         "market": build_market(market_row, now) if segment_for(project.get("category")) in MARKET_SEGMENTS else None,
         "holders": build_holders(holders_row, now) if segment_for(project.get("category")) in MARKET_SEGMENTS else None,
+        "socials": build_socials(project.get("socials"), socials_row if segment_for(project.get("category")) in MARKET_SEGMENTS else None),
     }
 
 
@@ -250,14 +257,16 @@ def primary_contract(project: dict) -> Optional[str]:
 
 def build_all_summaries(projects: list[dict], score_rows: list[dict],
                         market_rows: Optional[list[dict]] = None, now: Optional[datetime] = None,
-                        holders_rows: Optional[list[dict]] = None) -> list[dict]:
+                        holders_rows: Optional[list[dict]] = None,
+                        socials_rows: Optional[list[dict]] = None) -> list[dict]:
     """Build a project summary for every tracked project, scored or not."""
     latest = latest_score_by_project(score_rows)
     markets = market_by_address(market_rows or [])
     holders = market_by_address(holders_rows or [])      # same {lowercased contract: row} shape
+    socials = market_by_address(socials_rows or [])
     return [
         build_project_summary(p, latest.get(p["id"]), markets.get(primary_contract(p) or ""), now,
-                              holders.get(primary_contract(p) or ""))
+                              holders.get(primary_contract(p) or ""), socials.get(primary_contract(p) or ""))
         for p in projects
     ]
 
