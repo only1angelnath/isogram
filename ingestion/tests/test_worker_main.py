@@ -44,6 +44,19 @@ def _fake_venues(monkeypatch, behaviour):
     monkeypatch.setitem(sys.modules, "venues", mod)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_socials(monkeypatch):
+    mod = types.ModuleType("socials")
+    mod.run_socials_refresh = lambda: {"skipped": "stubbed in tests"}
+    monkeypatch.setitem(sys.modules, "socials", mod)
+
+
+def _fake_socials(monkeypatch, behaviour):
+    mod = types.ModuleType("socials")
+    mod.run_socials_refresh = behaviour
+    monkeypatch.setitem(sys.modules, "socials", mod)
+
+
 def _fake_holders(monkeypatch, behaviour):
     mod = types.ModuleType("holders")
     mod.run_holders_refresh = behaviour
@@ -202,6 +215,20 @@ def test_venue_summaries_for_full_partial_and_empty_runs(monkeypatch, capsys):
     _fake_venues(monkeypatch, lambda: dict(full, written=0, stopped="venue_list_http_500"))
     worker.main()
     assert "::warning title=Venue scan wrote nothing::60 calls, stopped (venue_list_http_500); previous venue numbers kept" in capsys.readouterr().out
+
+
+def test_socials_crash_does_not_fail_the_job_and_summary_is_printed(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "run", lambda: None)
+    _fake_discovery(monkeypatch, lambda: OK)
+    def boom():
+        raise RuntimeError("gecko info exploded")
+    _fake_socials(monkeypatch, boom)
+    worker.main()
+    out = capsys.readouterr().out
+    assert "::warning title=Social links refresh failed::RuntimeError" in out and "Finished in" in out
+    _fake_socials(monkeypatch, lambda: {"due": 60, "calls": 60, "with_links": 41, "empty": 19, "stopped": None, "targets": 789})
+    worker.main()
+    assert "Socials: 41 with links, 19 without, 60 due of 789 tokens, 60 calls." in capsys.readouterr().out
 
 
 def test_market_data_does_not_run_after_a_real_ingestion_failure(monkeypatch):

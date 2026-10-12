@@ -713,6 +713,26 @@ def _run_venues_safely() -> None:
           + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
 
 
+def _run_socials_safely() -> None:
+    """Self-reported social links (GeckoTerminal token info): same contract as the other optional refreshes."""
+    try:
+        from socials import run_socials_refresh
+
+        result = run_socials_refresh()
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(f"::warning title=Social links refresh failed::{type(exc).__name__}: {exc}")
+        return
+    if "skipped" in result:
+        print(f"Socials: skipped ({result['skipped']})")
+        return
+    print(f"Socials: {result['with_links']} with links, {result['empty']} without, {result['due']} due of "
+          f"{result['targets']} tokens, {result['calls']} calls"
+          + (f", stopped early ({result['stopped']})" if result["stopped"] else "") + ".")
+
+
 def main() -> None:
     start = time.monotonic()
     try:
@@ -726,6 +746,7 @@ def main() -> None:
     _run_market_data_safely()
     _run_holders_safely()
     _run_venues_safely()
+    _run_socials_safely()
     print(f"Finished in {time.monotonic() - start:.1f}s")
 
 
