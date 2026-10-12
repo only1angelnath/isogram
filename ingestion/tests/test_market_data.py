@@ -44,7 +44,7 @@ def test_parse_token_rows_full_row():
         "contract_address": "0xabcdef" + "0" * 34, "symbol": "USDC", "coingecko_coin_id": "usd-coin",
         "price_usd": 0.9997,
         "fdv_usd": 5.2e8, "market_cap_usd": None, "liquidity_usd": 14621800.5,
-        "volume_24h_usd": 56838400.0, "source": "geckoterminal",
+        "volume_24h_usd": 56838400.0, "price_change_24h_pct": None, "source": "geckoterminal",
     }
 
 
@@ -211,14 +211,32 @@ def test_fetch_batch_uses_pro_endpoint_with_key_header(monkeypatch):
     class Resp:
         status_code = 200
         def json(self): return {"data": []}
-    def fake_get(url, headers=None, timeout=None):
-        seen.update(url=url, headers=headers, timeout=timeout)
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen.update(url=url, params=params, headers=headers, timeout=timeout)
         return Resp()
     monkeypatch.setattr(md.requests, "get", fake_get)
+    monkeypatch.setattr(md, "_INCLUDE_TOP_POOLS", True)
     assert md.fetch_batch([addr(1), addr(2)], "KEY") == (200, {"data": []})
+    assert seen["params"] == {"include": "top_pools"}
     assert seen["url"].startswith("https://pro-api.coingecko.com/api/v3/onchain/networks/arc/tokens/multi/")
     assert seen["url"].endswith(f"{addr(1)},{addr(2)}")
     assert seen["headers"]["x-cg-pro-api-key"] == "KEY" and seen["timeout"] == md.REQUEST_TIMEOUT_SECONDS
+
+
+def test_fetch_batch_retries_without_include_when_the_api_rejects_it_and_remembers(monkeypatch):
+    calls = []
+    class Resp:
+        def __init__(self, code): self.status_code = code
+        def json(self): return {"data": []}
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append(params)
+        return Resp(400 if params else 200)
+    monkeypatch.setattr(md.requests, "get", fake_get)
+    monkeypatch.setattr(md, "_INCLUDE_TOP_POOLS", True)
+    assert md.fetch_batch([addr(1)], "KEY") == (200, {"data": []})
+    assert calls == [{"include": "top_pools"}, None]            # one rejected attempt, one plain retry
+    md.fetch_batch([addr(2)], "KEY")
+    assert calls[2:] == [None]                                   # remembered: no more rejected attempts
 
 
 def test_fetch_batch_maps_failures_to_status_codes(monkeypatch):
@@ -407,3 +425,49 @@ def test_a_failing_7d_pass_never_takes_the_price_refresh_down(monkeypatch):
     monkeypatch.setattr(md, "load_volume_state", boom)
     result = md.run_market_data_refresh()
     assert result["upserted"] == 1 and "RuntimeError: table locked" in result["volume_7d_error"]
+
+
+# ------------------------------------------------------------------ 24h price change (top pool, base token only)
+
+def token_item(address, pool_id=None):
+    item = {"attributes": {"address": address, "price_usd": "1.5", "symbol": "T"}, "relationships": {}}
+    if pool_id:
+        item["relationships"]["top_pools"] = {"data": [{"id": pool_id, "type": "pool"}]}
+    return item
+
+
+def pool_included(pool_id, base, h24):
+    return {"id": pool_id, "type": "pool",
+            "attributes": {"price_change_percentage": {"h24": h24}},
+            "relationships": {"base_token": {"data": {"id": f"arc_{base}", "type": "token"}}}}
+
+
+def test_price_change_is_read_from_the_top_pool_when_the_token_is_its_base():
+    payload = {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_p1", addr(1), "-11.896")]}
+    assert md.parse_token_rows(payload)[addr(1)]["price_change_24h_pct"] == pytest.approx(-11.896)
+
+
+def test_price_change_is_unknown_when_the_token_is_the_quote_side_of_its_top_pool():
+    payload = {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_p1", addr(2), "5.0")]}
+    assert md.parse_token_rows(payload)[addr(1)]["price_change_24h_pct"] is None      # that 5% belongs to token 2
+
+
+def test_price_change_tolerates_missing_or_junk_pool_data():
+    cases = [
+        {"data": [token_item(addr(1))]},                                              # no top_pools relationship
+        {"data": [token_item(addr(1), "arc_p1")]},                                    # include not honoured: no `included`
+        {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_p1", addr(1), "garbage")]},
+        {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_p1", addr(1), None)]},
+        {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_p1", addr(1), "nan")]},
+        {"data": [token_item(addr(1), "arc_p1")], "included": [pool_included("arc_other", addr(1), "3")]},
+        {"data": [token_item(addr(1), "arc_p1")], "included": ["junk", None, {"id": "arc_p1"}]},
+    ]
+    for payload in cases:
+        assert md.parse_token_rows(payload)[addr(1)]["price_change_24h_pct"] is None
+
+
+def test_zero_change_is_a_real_value_and_positive_is_kept_signed():
+    payload = {"data": [token_item(addr(1), "arc_p1"), token_item(addr(2), "arc_p2")],
+               "included": [pool_included("arc_p1", addr(1), "0"), pool_included("arc_p2", addr(2), "+19.6")]}
+    rows = md.parse_token_rows(payload)
+    assert rows[addr(1)]["price_change_24h_pct"] == 0.0 and rows[addr(2)]["price_change_24h_pct"] == pytest.approx(19.6)

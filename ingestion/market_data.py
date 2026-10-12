@@ -41,6 +41,15 @@ PAGE_SIZE = 1000                # PostgREST's default response cap
 PRICED_CATEGORIES = {"token", "meme", "wrapped", "stablecoin", "institutional", "launchpad"}
 
 
+def _signed(value):
+    """Like _num but allows negatives (a 24h price change can be a fall); None for junk / non-finite."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def _num(value):
     """float for a finite, non-negative number; None for anything else (null, '', NaN, junk)."""
     try:
@@ -50,10 +59,23 @@ def _num(value):
     return f if math.isfinite(f) and f >= 0 else None
 
 
+def _change_from_top_pool(item: dict, address: str, pools: dict):
+    """24h % change of this token from its top pool, only if the token is that pool's BASE token."""
+    top = (((item.get("relationships") or {}).get("top_pools") or {}).get("data") or [])
+    pool = pools.get(top[0].get("id")) if top and isinstance(top[0], dict) else None
+    if not pool:
+        return None
+    base_id = ((((pool.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id") or "").lower()
+    if not base_id.endswith(address):
+        return None                          # the pool's change describes a different asset
+    return _signed(((pool.get("attributes") or {}).get("price_change_percentage") or {}).get("h24"))
+
+
 def parse_token_rows(payload: dict) -> dict:
     """GeckoTerminal multi-token payload -> {lowercased_address: row for token_market_data}.
     A price of 0 is treated as 'no price' (a pool with nothing in it), never stored as 0."""
     rows = {}
+    pools = {p.get("id"): p for p in (payload or {}).get("included") or [] if isinstance(p, dict)}
     for item in (payload or {}).get("data") or []:
         attrs = item.get("attributes") or {}
         address = (attrs.get("address") or "").strip().lower()
@@ -70,6 +92,7 @@ def parse_token_rows(payload: dict) -> dict:
             "market_cap_usd": _num(attrs.get("market_cap_usd")),
             "liquidity_usd": _num(attrs.get("total_reserve_in_usd")),
             "volume_24h_usd": _num((attrs.get("volume_usd") or {}).get("h24")),
+            "price_change_24h_pct": _change_from_top_pool(item, address, pools),
             "source": SOURCE,
         }
     return rows
@@ -107,12 +130,14 @@ def load_target_addresses(client) -> list:
     return collect_targets(rows)
 
 
-def fetch_batch(addresses: list, api_key: str):
-    """One multi-token call. Returns (http_status, payload_or_None); status 0 = network error."""
-    url = GECKO_MULTI_URL.format(network=NETWORK, addresses=",".join(addresses))
+_INCLUDE_TOP_POOLS = True     # flipped off for the rest of the process if the API rejects include=top_pools
+
+
+def _get_batch(url: str, api_key: str, include: bool):
     try:
         resp = requests.get(
             url,
+            params={"include": "top_pools"} if include else None,
             headers={"x-cg-pro-api-key": api_key, "Accept": "application/json"},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
@@ -124,6 +149,19 @@ def fetch_batch(addresses: list, api_key: str):
         return 200, resp.json()
     except ValueError:
         return 200, None
+
+
+def fetch_batch(addresses: list, api_key: str):
+    """One multi-token call, asking for each token's top pool too (its 24h price change). If the API rejects
+    the include parameter (400/422) the call is retried without it and the 24h change simply stays unknown.
+    Returns (http_status, payload_or_None); status 0 = network error."""
+    global _INCLUDE_TOP_POOLS
+    url = GECKO_MULTI_URL.format(network=NETWORK, addresses=",".join(addresses))
+    status, payload = _get_batch(url, api_key, _INCLUDE_TOP_POOLS)
+    if status in (400, 422) and _INCLUDE_TOP_POOLS:
+        _INCLUDE_TOP_POOLS = False
+        status, payload = _get_batch(url, api_key, False)
+    return status, payload
 
 
 def refresh_market_data(client, addresses: list, api_key: str, fetch=fetch_batch,
