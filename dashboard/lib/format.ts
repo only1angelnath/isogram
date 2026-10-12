@@ -84,3 +84,13 @@ export function formatPrice(value: number | null): string {
   const decimals = Math.min(12, 3 - Math.floor(Math.log10(value)));
   return "$" + value.toFixed(decimals);
 }
+
+/** Signed percent for a 24h change: +19.6%, -11.9%, 0.0%, +1.2k%; "—" when unknown. */
+export function formatChange(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(1)}M%`;
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}k%`;
+  return `${sign}${abs.toFixed(1)}%`;
+}

@@ -14,6 +14,8 @@ export interface MarketData {
   market_cap_usd: number | null;
   liquidity_usd: number | null;
   volume_24h_usd: number | null;
+  /** 24h price change in percent (signed), from the token's top pool; null = unknown. */
+  price_change_24h_pct?: number | null;
   /** Last 7 UTC days in the token's most liquid pool only (can understate); null = unknown/stale. */
   volume_7d_usd?: number | null;
   /** ok = trustworthy; thin = under $10k liquidity; inactive = reserves but ~no trading. */
@@ -21,6 +23,13 @@ export interface MarketData {
   listed_on_coingecko: boolean;
   source: string;
   fetched_at: string;
+}
+
+/** A validated link; curated=false means the token's deployer registered it (unverified). */
+export interface SocialLink {
+  kind: "website" | "x" | "telegram" | "discord" | "github";
+  url: string;
+  curated: boolean;
 }
 
 /** 24h trading volume of one DEX or launch venue on Arc (GeckoTerminal, third-party). */
@@ -65,6 +74,8 @@ export interface ProjectSummary {
   market?: MarketData | null;
   /** Addresses holding the token (Arc explorer); token / stablecoin / launchpad projects. null = unknown. */
   holders?: number | null;
+  /** Validated links, curated first; empty when none are known. */
+  socials?: SocialLink[];
 }
 
 export interface ProjectDetail extends ProjectSummary {

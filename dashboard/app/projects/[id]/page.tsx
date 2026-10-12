@@ -7,7 +7,8 @@ import { ScoreGauge } from "@/components/ScoreGauge";
 import { Avatar } from "@/components/Avatar";
 import { fillCalendar } from "@/lib/series";
 import { segmentConfig, sumGas } from "@/lib/segments";
-import { failedTone, formatCount, formatPercent, formatPrice, formatRelativeAge, formatUsd, formatUsdCompact } from "@/lib/format";
+import { SocialLinks } from "@/components/SocialLinks";
+import { failedTone, formatChange, formatCount, formatPercent, formatPrice, formatRelativeAge, formatUsd, formatUsdCompact } from "@/lib/format";
 
 interface ProjectPageProps {
   params: Promise<{ id: string }>;
@@ -76,9 +77,19 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
         </div>
       </div>
 
-      <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)", marginBottom: 28 }}>
+      <p className="mono" style={{ fontSize: 12, color: "var(--ink-dim)", marginBottom: (project.socials ?? []).length > 0 ? 12 : 28 }}>
         added {formatRelativeAge(project.created_at)} · last measured {formatRelativeAge(project.computed_at)}
       </p>
+      {(project.socials ?? []).length > 0 && (
+        <div style={{ marginBottom: 28 }}>
+          <SocialLinks links={project.socials} />
+          {(project.socials ?? []).some((l) => !l.curated) && (
+            <span className="mono iso-dim" style={{ fontSize: 11, marginLeft: 10 }}>
+              links in grey were registered by the token&apos;s deployer and are not verified
+            </span>
+          )}
+        </div>
+      )}
 
       {project.tier === "discovered" && (
         <p className="pt-note" style={{ marginBottom: 24 }}>
@@ -110,7 +121,7 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
           {market ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, marginBottom: 12 }}>
-                <div className="stat-panel"><div className="value mono">{formatPrice(market.price_usd)}</div><div className="label">price</div></div>
+                <div className="stat-panel"><div className="value mono">{formatPrice(market.price_usd)}</div><div className="label">price{market.price_change_24h_pct != null && <span style={{ color: market.price_change_24h_pct > 0 ? "#5FC9C0" : market.price_change_24h_pct < 0 ? "#FF5B2E" : undefined }}> · {formatChange(market.price_change_24h_pct)} 24h</span>}</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.fdv_usd)}</div><div className="label">fdv</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.liquidity_usd)}</div><div className="label">liquidity</div></div>
                 <div className="stat-panel"><div className="value mono">{formatUsdCompact(market.volume_24h_usd)}</div><div className="label">volume (24h)</div></div>

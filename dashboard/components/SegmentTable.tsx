@@ -2,8 +2,9 @@ import Link from "next/link";
 import { ProjectSummary } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { COLUMN_LABELS, COLUMN_TITLES, ColumnKey, SegmentConfig, metricOf } from "@/lib/segments";
+import { SocialLinks } from "@/components/SocialLinks";
 import { Query, SortDir, href } from "@/lib/tableState";
-import { failedTone, formatCount, formatPercent, formatPrice, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
+import { failedTone, formatChange, formatCount, formatPercent, formatPrice, formatScore, formatUsd, formatUsdCompact } from "@/lib/format";
 
 function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): string {
   const v = metricOf(p, key, networkGas);
@@ -21,6 +22,7 @@ function cell(key: ColumnKey, p: ProjectSummary, networkGas: number | null): str
     case "vol24h":
     case "vol7d": return v === null ? "—" : formatUsdCompact(v);
     case "holders": return formatCount(v);
+    case "chg24h": return formatChange(v);
   }
 }
 
@@ -73,6 +75,7 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
           <tr>
             <SortTh label="project" colKey="name" sort={sort} />
             {config.columns.map((k) => <SortTh key={k} label={COLUMN_LABELS[k]} colKey={k} sort={sort} />)}
+            <th title="Website and social links. Links on discovered projects are registered by the token's deployer and are not verified.">links</th>
           </tr>
         </thead>
         <tbody>
@@ -104,6 +107,10 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
                     </td>
                   );
                 }
+                if (k === "chg24h") {
+                  const colour = v === null || v === 0 ? undefined : v > 0 ? "#5FC9C0" : "#FF5B2E";
+                  return <td key={k} className="iso-num" style={colour ? { color: colour } : undefined}>{formatChange(v)}</td>;
+                }
                 if (k === "fdv" && v === null && p.market) {
                   return <td key={k} className="iso-num iso-dim" title="Not shown: FDV is only meaningful when the price is backed by real liquidity and trading.">—</td>;
                 }
@@ -122,6 +129,7 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
                   </td>
                 );
               })}
+              <td><SocialLinks links={p.socials} /></td>
             </tr>
           ))}
         </tbody>

@@ -70,7 +70,8 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   withheld unless quality is `ok`, because they inherit every flaw of the price. 24h volume
   covers all pools; 7d volume is the sum of the last 7 UTC days in the token's most liquid
   pool only, so it can understate tokens that trade in several pools. The Tokens tab is
-  ranked by 24h volume. Data
+  ranked by 24h volume. The 24h price change comes from the token's most liquid pool and is shown
+  only when the token is that pool's base token. Data
   older than 24 hours is hidden. A `CoinGecko` tag means the token maps to a CoinGecko
   listing; without it the price comes from a DEX pool and is unverified. Token names are
   chosen by whoever deploys the contract, so a token called "Bitcoin" is not necessarily
@@ -92,6 +93,10 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
   filter is not public, so totals can differ from theirs. A venue is only updated from a complete
   scan, and a leading "≥" means it has more pools than the scan covers. Venues are listed as DEXes
   unless confirmed as launch platforms.
+- **Social links** are validated before they are shown: https only, no credentials or odd ports,
+  and X / Telegram / Discord / GitHub links are rebuilt on the platform's own host from a checked
+  handle. Links on discovered tokens are registered by the token's deployer with GeckoTerminal, so
+  they are labelled unverified; links on curated projects are set by hand and tinted.
 - **Contract discovery** uses GeckoTerminal and CoinGecko metadata to help identify and
   classify contracts before a human confirms them.
 

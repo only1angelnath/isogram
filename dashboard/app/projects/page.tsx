@@ -25,7 +25,7 @@ export default async function ProjectsPage({ searchParams }: {
   const networkGas = sumGas(days);
 
   const groups = SEGMENTS.map((cfg) => ({ cfg, items: all.filter((p) => (p.segment ?? "other") === cfg.id) })).filter((g) => g.items.length > 0);
-  const selectedId = (groups.find((g) => g.cfg.id === segment)?.cfg.id ?? groups.find((g) => g.cfg.id === "defi")?.cfg.id ?? groups[0]?.cfg.id) as SegmentId | undefined;
+  const selectedId = (groups.find((g) => g.cfg.id === segment)?.cfg.id ?? groups.find((g) => g.cfg.id === "token")?.cfg.id ?? groups[0]?.cfg.id) as SegmentId | undefined;
   const cfg = segmentConfig(selectedId);
   const selected = groups.find((g) => g.cfg.id === selectedId)?.items ?? [];
   const sortState = parseSort(sp.sort, sp.dir, ["name", ...cfg.columns], { key: cfg.sortBy, dir: "desc" });

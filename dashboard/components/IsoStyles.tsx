@@ -51,6 +51,10 @@ const CSS = `
 .iso-table th a.iso-sort { color: inherit; text-decoration: none; white-space: nowrap; }
 .iso-table th a.iso-sort:hover { color: #f2f0ea; text-decoration: none; }
 .iso-table th a.iso-sort.on { color: var(--accent); }
+.iso-links { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.iso-link { font: 11px var(--font-mono), monospace; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,.18); color: var(--ink-dim); text-decoration: none; }
+.iso-link:hover { color: #f2f0ea; border-color: rgba(255,255,255,.4); text-decoration: none; }
+.iso-link.curated { color: #5FC9C0; border-color: rgba(95,201,192,.45); }
 .iso-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font: 12px var(--font-mono), monospace; }
 .iso-pager-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .iso-pager-links a, .iso-pager-links .off { padding: 6px 11px; border-radius: 999px; border: 1px solid rgba(255,255,255,.13); text-decoration: none; color: var(--ink-dim); }
