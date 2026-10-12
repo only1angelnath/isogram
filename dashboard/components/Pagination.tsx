@@ -21,9 +21,9 @@ export function Pagination({ paged, basePath, query, noun = "rows" }: {
           {paged.page > 1 ? <Link href={link(paged.page - 1)} rel="prev">← prev</Link> : <span className="off">← prev</span>}
           {pageWindow(paged.page, paged.pages).map((p, i) =>
             p === null ? (
-              <span key={`gap${i}`} className="off">…</span>
+              <span key={`gap${i}`} className="off pg">…</span>
             ) : (
-              <Link key={p} href={link(p)} aria-current={p === paged.page ? "page" : undefined}>{p}</Link>
+              <Link key={p} href={link(p)} className={`pg${p === paged.page ? " cur" : ""}`} aria-current={p === paged.page ? "page" : undefined}>{p}</Link>
             ),
           )}
           {paged.page < paged.pages ? <Link href={link(paged.page + 1)} rel="next">next →</Link> : <span className="off">next →</span>}

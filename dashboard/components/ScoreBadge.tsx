@@ -11,13 +11,13 @@ interface ScoreBadgeProps {
 // dashboard and what they'd paste into their own repo always match.
 export function ScoreBadge({ projectId, projectName }: ScoreBadgeProps) {
   const badgeUrl = `${getApiBaseUrlForBadge()}/badge/${encodeURIComponent(projectId)}.svg`;
-  const markdownSnippet = `[![${projectName} — Arc Native Score](${badgeUrl})](https://isogram.xyz/projects/${projectId})`;
+  const markdownSnippet = `[![${projectName} — Arc Native Score](${badgeUrl})](https://isogram.vercel.app/projects/${projectId})`;
 
   return (
     <div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={badgeUrl} alt={`${projectName} Arc Native Score badge`} height={20} />
-      <p className="stat-label" style={{ marginTop: 12, marginBottom: 4 }}>
+      <p className="meta" style={{ marginTop: 12, marginBottom: 6 }}>
         embed in your README
       </p>
       <pre

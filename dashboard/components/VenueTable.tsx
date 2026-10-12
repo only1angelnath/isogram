@@ -34,7 +34,22 @@ export function VenueTable({ venues, startRank = 1, sort }: {
     return <div className="iso-table-wrap"><div className="iso-dim" style={{ padding: 24 }}>No venues with trading volume in this group right now.</div></div>;
   }
   return (
-    <div className="iso-table-wrap">
+    <>
+    <div className="iso-mlist">
+      {venues.map((v, i) => (
+        <div key={v.dex_id} className="iso-mrow" style={{ gridTemplateColumns: "1fr auto" }}>
+          <span className="top"><span className="nm">{v.name}</span><span className={`iso-pill${v.kind === "launchpad" ? " good" : ""}`}>{v.kind === "launchpad" ? "launch" : "dex"}</span></span>
+          <span className="val">{v.truncated ? "≥ " : ""}{formatUsdCompact(v.volume_24h_usd)}<small>24h volume</small></span>
+          <span className="sub" style={{ gridColumn: "1 / -1" }}>
+            <span>#{startRank + i}</span>
+            <span>share <b>{formatPercent(v.share)}</b></span>
+            <span>pools <b>{v.active_pools.toLocaleString("en-US")}</b></span>
+            {v.excluded_volume_usd > 0 && <span>+{formatUsdCompact(v.excluded_volume_usd)} excluded</span>}
+          </span>
+        </div>
+      ))}
+    </div>
+    <div className="iso-table-wrap has-list">
       <table className="iso-table">
         <thead>
           <tr>
@@ -73,5 +88,6 @@ export function VenueTable({ venues, startRank = 1, sort }: {
         </tbody>
       </table>
     </div>
+    </>
   );
 }

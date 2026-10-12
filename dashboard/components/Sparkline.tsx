@@ -2,8 +2,7 @@
 //
 // Used for the hero's mini charts. The previous hero charts were decorative fixed curves
 // (against docs/BRANDING.md §5's honest-stats rule); this plots the real series and keeps
-// the motion: the line draws itself on load (CSS, see IsoStyles), a dot travels along the
-// real path (SVG animateMotion), and the newest point pulses.
+// the motion: the line draws itself on load and the newest point pulses (CSS, see globals.css).
 // Rules: null = "no data" and BREAKS the line (never drawn as 0); fewer than two measured
 // points shows "collecting data…"; a partial last point is dashed.
 
@@ -13,13 +12,13 @@ interface SparklineProps {
   height?: number;
   lastPartial?: boolean;
   ariaLabel?: string;
-  /** Disable the travelling dot / pulse (e.g. for dense lists). */
+  /** Disable the end-point pulse (e.g. for dense lists). */
   still?: boolean;
 }
 
-const W = 160;
+const W = 320;
 
-export function Sparkline({ values, color = "var(--accent)", height = 50, lastPartial = false, ariaLabel, still = false }: SparklineProps) {
+export function Sparkline({ values, color = "var(--accent)", height = 64, lastPartial = false, ariaLabel, still = false }: SparklineProps) {
   const measured = values.filter((v): v is number => v !== null);
   if (measured.length < 2) {
     return (
@@ -57,27 +56,18 @@ export function Sparkline({ values, color = "var(--accent)", height = 50, lastPa
     dashed = `M${x(lastIndex - 1).toFixed(1)} ${y(prev).toFixed(1)} L${x(lastIndex).toFixed(1)} ${y(last).toFixed(1)}`;
   }
 
-  // Path for the travelling dot: the measured points joined in order.
-  const travel = values
-    .map((v, i) => (v === null ? null : `${x(i).toFixed(1)} ${y(v).toFixed(1)}`))
-    .filter((p): p is string => p !== null)
-    .map((p, i) => `${i === 0 ? "M" : "L"}${p}`)
-    .join(" ");
   const lastMeasuredIndex = values.map((v, i) => (v === null ? -1 : i)).reduce((a, b) => Math.max(a, b), -1);
   const lastMeasured = values[lastMeasuredIndex] as number;
 
   return (
-    <svg viewBox={`0 0 ${W} ${height}`} width="100%" height={height} role="img" aria-label={ariaLabel}>
+    <svg viewBox={`0 0 ${W} ${height}`} style={{ width: "100%", height: "auto", display: "block" }} role="img" aria-label={ariaLabel}>
       {runs.map((d, i) => (
-        <path key={i} className="iso-spark-line" d={d} pathLength={1} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path key={i} className="iso-spark-line" d={d} pathLength={1} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       ))}
-      {dashed && <path d={dashed} fill="none" stroke={color} strokeWidth="1.8" strokeDasharray="3 3" />}
+      {dashed && <path d={dashed} fill="none" stroke={color} strokeWidth="1.6" strokeDasharray="3 3" />}
       {!still && (
         <>
           <circle className="iso-spark-end" cx={x(lastMeasuredIndex)} cy={y(lastMeasured)} r="2.6" fill={color} />
-          <circle r="2.4" fill={color}>
-            <animateMotion dur="5s" begin="1.8s" repeatCount="indefinite" path={travel} />
-          </circle>
         </>
       )}
     </svg>

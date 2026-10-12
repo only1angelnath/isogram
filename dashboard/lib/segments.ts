@@ -27,7 +27,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "token",
     label: "Tokens",
     short: "Tokens",
-    blurb: "Tokens, memecoins and wrapped assets found on-chain. Usage comes from the chain; price, volume, FDV and liquidity are third-party data from GeckoTerminal, shown only where a trading pool is indexed; the table is ranked by 24h trading volume. Token names are chosen by whoever deploys the contract: a token called \"Bitcoin\" is not necessarily Bitcoin.",
+    blurb: "Tokens and memecoins found on-chain, ranked by 24h trading volume. Prices are third-party.",
     columns: ["price", "chg24h", "vol24h", "vol7d", "liquidity", "fdv", "tx", "holders"],
     sortBy: "vol24h",
     showsScore: false,
@@ -37,7 +37,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "defi",
     label: "DeFi protocols",
     short: "DeFi",
-    blurb: "DEXs, lending, yield and staking. TVL applies here, and the Arc Native Score is computed only within this group.",
+    blurb: "DEXs, lending, yield and staking. TVL and the Arc Native Score apply only here.",
     columns: ["tvl", "tx", "users", "gas", "failed", "score"],
     sortBy: "tvl",
     showsScore: true,
@@ -47,7 +47,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "launchpad",
     label: "Launchpads",
     short: "Launchpads",
-    blurb: "Launch platforms on Arc. Usage (transactions, users, gas) is measured on the platform's own contracts and token; the price, volume and liquidity columns describe the platform's own token and are third-party data from GeckoTerminal. Tokens launched through a platform appear under Tokens.",
+    blurb: "Launch platforms on Arc. Price columns describe the platform's own token.",
     columns: ["price", "chg24h", "vol24h", "liquidity", "tx", "users", "gas"],
     sortBy: "vol24h",
     showsScore: false,
@@ -57,7 +57,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "infra",
     label: "Infrastructure",
     short: "Infra",
-    blurb: "Routers, proxies, bridges, oracles and governance. Measured by how much they are used and how much network gas they account for.",
+    blurb: "Routers, proxies, bridges and oracles, measured by usage and share of network gas.",
     columns: ["tx", "users", "gas", "share", "failed"],
     sortBy: "gas",
     showsScore: false,
@@ -67,7 +67,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "stablecoin",
     label: "Stablecoins",
     short: "Stablecoins",
-    blurb: "Hand-verified stablecoins (USDC, EURC, USYC). Usage comes from the chain; price and liquidity are third-party data from GeckoTerminal.",
+    blurb: "Hand-verified stablecoins: USDC, EURC and USYC.",
     columns: ["price", "liquidity", "tx", "holders", "users", "failed"],
     sortBy: "tx",
     showsScore: false,
@@ -77,7 +77,7 @@ export const SEGMENTS: SegmentConfig[] = [
     id: "other",
     label: "Unclassified",
     short: "Other",
-    blurb: "Contracts whose type has not been identified yet.",
+    blurb: "Contracts whose type is not identified yet.",
     columns: ["tx", "users", "gas", "failed"],
     sortBy: "tx",
     showsScore: false,
@@ -103,7 +103,7 @@ export const COLUMN_LABELS: Record<ColumnKey, string> = {
   vol24h: "24h vol",
   vol7d: "7d vol",
   holders: "holders",
-  chg24h: "24h",
+  chg24h: "24h %",
 };
 
 /** Hover text for columns whose basis is not obvious from the label. */
@@ -175,4 +175,3 @@ export function sumGas(days: { usdc_gas_paid: number | null }[]): number | null 
   const vals = days.map((d) => d.usdc_gas_paid).filter((v): v is number => v !== null);
   return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
 }
-

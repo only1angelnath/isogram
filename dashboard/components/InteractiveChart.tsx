@@ -85,8 +85,10 @@ export function InteractiveChart({ kind, points, format, color = "var(--accent)"
   const max = niceMax(Math.max(...measured));
   const pct = (v: number) => Math.max(0, Math.min(100, (v / max) * 100));
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
-  const step = n <= 7 ? 1 : Math.ceil(n / 6);
-  const xLabels = points.map((p, i) => (i % step === 0 || i === n - 1 ? dayLabel(p.label) : ""));
+  // Two label sets, switched by CSS: the narrow one (phones) shows roughly half as many labels.
+  const labelsEvery = (step: number) => points.map((p, i) => (i % step === 0 || (i === n - 1 && n - 1 - Math.floor((n - 1) / step) * step >= step / 2) ? dayLabel(p.label) : ""));
+  const xLabels = labelsEvery(n <= 7 ? 1 : Math.ceil(n / 6));
+  const xLabelsNarrow = labelsEvery(n <= 4 ? 1 : Math.ceil(n / 3.5));
   const cx = (i: number) => ((i + 0.5) / n) * 100;
 
   // --- line geometry: one path per contiguous run of measured values ---
@@ -188,7 +190,7 @@ export function InteractiveChart({ kind, points, format, color = "var(--accent)"
 
           <div className="iso-cols">
             {points.map((p, i) => (
-              <div key={p.label} className="iso-col" data-active={active === i} onMouseEnter={() => setActive(i)} onFocus={() => setActive(i)} tabIndex={0}>
+              <div key={p.label} className="iso-col" data-active={active === i} onMouseEnter={() => setActive(i)} onPointerDown={() => setActive(i)} onFocus={() => setActive(i)} tabIndex={0}>
                 {kind === "bar" &&
                   (p.value === null ? (
                     <div className="iso-nodata" />
@@ -223,8 +225,13 @@ export function InteractiveChart({ kind, points, format, color = "var(--accent)"
           )}
         </div>
 
-        <div className="iso-xaxis">
+        <div className="iso-xaxis wide" aria-hidden="true">
           {xLabels.map((l, i) => (
+            <span key={i}>{l}</span>
+          ))}
+        </div>
+        <div className="iso-xaxis narrow" aria-hidden="true">
+          {xLabelsNarrow.map((l, i) => (
             <span key={i}>{l}</span>
           ))}
         </div>

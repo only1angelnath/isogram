@@ -54,6 +54,69 @@ function SortTh({ label, colKey, sort }: { label: string; colKey: string; sort?:
   );
 }
 
+const SHORT: Partial<Record<ColumnKey, string>> = { users: "users", tx: "tx", gas: "gas", share: "gas share" };
+
+/** Under 760px the table is replaced by a list: name, the active metric large, three more underneath. */
+function MobileList({ projects, config, networkGas, startRank, sort }: {
+  projects: ProjectSummary[];
+  config: SegmentConfig;
+  networkGas: number | null;
+  startRank: number;
+  sort?: SortLinks;
+}) {
+  const primaryKey = ((sort?.key && sort.key !== "name" ? sort.key : config.sortBy) as ColumnKey);
+  const others = config.columns.filter((k) => k !== primaryKey && k !== "fdv" && k !== "vol7d").slice(0, 3);
+  return (
+    <div className="iso-mlist">
+      {projects.map((p, i) => {
+        const v = metricOf(p, primaryKey, networkGas);
+        const change = p.market?.price_change_24h_pct ?? null;
+        return (
+          <Link key={p.id} href={`/projects/${p.id}`} className="iso-mrow">
+            <Avatar name={p.name} />
+            <span className="top" style={{ minWidth: 0 }}>
+              <span className="nm">{p.name}</span>
+              {p.tier === "curated" && <span className="iso-pill good">verified</span>}
+            </span>
+            <span className="val">
+              {cell(primaryKey, p, networkGas)}
+              <small>{COLUMN_LABELS[primaryKey]}</small>
+            </span>
+            <span className="sub">
+              <span>#{startRank + i}</span>
+              <span>{p.category ?? "unclassified"}</span>
+              {others.map((k) => (
+                <span key={k}>{SHORT[k] ?? COLUMN_LABELS[k]} <b style={k === "chg24h" && change !== null && change !== 0 ? { color: change > 0 ? "#5FC9C0" : "#FF5B2E" } : undefined}>{cell(k, p, networkGas)}</b></span>
+              ))}
+              {v === null && primaryKey === "price" && <span>no market data</span>}
+            </span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Horizontally scrolling sort chips, mobile only (the desktop table sorts from its headers). */
+function MobileSort({ config, sort }: { config: SegmentConfig; sort: SortLinks }) {
+  const keys = (config.columns.filter((k) => k !== "failed") as string[]).concat(["name"]);
+  return (
+    <div className="iso-msort" role="group" aria-label="Sort by">
+      <span className="lbl">Sort</span>
+      {keys.map((k) => {
+        const active = sort.key === k;
+        const nextDir: SortDir = active ? (sort.dir === "desc" ? "asc" : "desc") : k === "name" ? "asc" : "desc";
+        const label = k === "name" ? "name" : COLUMN_LABELS[k as ColumnKey];
+        return (
+          <Link key={k} href={href(sort.basePath, { ...sort.query, sort: k, dir: nextDir })} prefetch={false} className={active ? "on" : undefined}>
+            {label}{active ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SegmentTable({ projects, config, networkGas, startRank = 1, sort }: {
   projects: ProjectSummary[];
   config: SegmentConfig;
@@ -69,7 +132,10 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
   ) as Record<ColumnKey, number>;
 
   return (
-    <div className="iso-table-wrap">
+    <>
+    {sort && <MobileSort config={config} sort={sort} />}
+    <MobileList projects={projects} config={config} networkGas={networkGas} startRank={startRank} sort={sort} />
+    <div className="iso-table-wrap has-list">
       <table className="iso-table">
         <thead>
           <tr>
@@ -80,13 +146,13 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
         </thead>
         <tbody>
           {projects.map((p, i) => (
-            <tr key={p.id} style={{ animationDelay: `${Math.min(i, 12) * 35}ms` }}>
+            <tr key={p.id}>
               <td>
                 <Link href={`/projects/${p.id}`} className="iso-cell-main">
                   <span className="iso-rank">{startRank + i}</span>
                   <Avatar name={p.name} />
                   <span style={{ minWidth: 0 }}>
-                    <span style={{ fontWeight: 600, display: "block", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                    <span className="iso-name">{p.name}</span>
                     <span className="iso-pill" style={{ marginTop: 3 }}>{p.category ?? "unclassified"}</span>
                     {p.tier === "curated" && <span className="iso-pill good" style={{ marginLeft: 6 }}>verified</span>}
                     {p.market?.listed_on_coingecko && <span className="iso-pill good" style={{ marginLeft: 6 }} title="Mapped to a CoinGecko listing">CoinGecko</span>}
@@ -135,6 +201,6 @@ export function SegmentTable({ projects, config, networkGas, startRank = 1, sort
         </tbody>
       </table>
     </div>
+    </>
   );
 }
-
