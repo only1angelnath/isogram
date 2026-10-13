@@ -33,8 +33,10 @@ export default async function HomePage() {
     const cur = pts[i];
     const prev = i > 0 && !pts[i - 1].partial ? pts[i - 1].value : null;
     const change = prev !== null && prev !== 0 && cur.value !== null ? (cur.value - prev) / prev : null;
-    return { value: cur.value as number, day: cur.label, change };
+    return { value: cur.value as number, day: cur.label, prevDay: i > 0 ? pts[i - 1].label : null, change };
   };
+  const span = fillCalendar(days, (d) => ({ value: d.active_addresses }));
+  const rangeLabel = span.length > 1 ? `${formatDay(span[0].label)} – ${formatDay(span[span.length - 1].label)}` : null;
   const usdcMoved = (d: (typeof days)[number]) => usdcByDay.get(d.day) ?? null;
   const gasHead = headline((d) => d.usdc_gas_paid);
   const moveHead = headline(usdcMoved);
@@ -49,10 +51,12 @@ export default async function HomePage() {
     <main>
       <div className="container hero">
         <div className="hero-copy">
-          <h1>
-            The data <span className="hl">truth layer</span> for Arc.
-          </h1>
-          <p>Live network activity, projects, tokens and DEX volume for Arc mainnet, with every figure sourced and labelled.</p>
+          <div>
+            <h1>
+              The data <span className="hl">truth layer</span> for Arc.
+            </h1>
+            <p>Live network activity, projects, tokens and DEX volume for Arc mainnet, with every figure sourced and labelled.</p>
+          </div>
           <div className="hero-cta">
             <Link href="/projects" className="btn">Explore projects</Link>
             <Link href="/docs/api" className="btn-ghost">API docs</Link>
@@ -62,7 +66,7 @@ export default async function HomePage() {
         <div className="chart-panel">
           <div className="cap">
             <StatusPill status={status} />
-            <span className="cap-range">last 7 days</span>
+            {rangeLabel && <span className="cap-range" title="UTC calendar days. The dashed end of each line is today so far.">{rangeLabel} · UTC</span>}
           </div>
           <div className="mini-metrics">
             <HeroRow label="Gas paid" unit="USDC / day" head={gasHead} fmt={fmtGas}
@@ -119,7 +123,7 @@ function fmtGas(v: number | null): string {
   return formatUsd(v, { decimals: v < 1 ? 4 : 2 });
 }
 
-interface Head { value: number; day: string; change: number | null }
+interface Head { value: number; day: string; prevDay: string | null; change: number | null }
 
 function HeroRow({ label, unit, head, fmt, values, lastPartial, color, aria }: {
   label: string; unit: string; head: Head | null; fmt: (v: number | null) => string;
@@ -132,9 +136,9 @@ function HeroRow({ label, unit, head, fmt, values, lastPartial, color, aria }: {
         <div className="mini-label">{label} <span>{unit}</span></div>
         <div className="mini-value">{head ? fmt(head.value) : "—"}</div>
         <div className="mini-sub">
-          {head ? formatDay(head.day) : "no completed day yet"}
-          {ch !== null && (
-            <b className={ch >= 0 ? "up" : "down"}> {ch >= 0 ? "+" : "−"}{Math.abs(ch * 100).toFixed(1)}%</b>
+          <span>{head ? `${formatDay(head.day)} (full day)` : "no completed day yet"}</span>
+          {ch !== null && head?.prevDay && (
+            <b className={ch >= 0 ? "up" : "down"}>{ch >= 0 ? "+" : "−"}{Math.abs(ch * 100).toFixed(1)}% vs {formatDay(head.prevDay)}</b>
           )}
         </div>
       </div>
