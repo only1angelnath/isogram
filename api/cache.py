@@ -24,9 +24,11 @@ log = logging.getLogger("isogram.cache")
 
 
 class SnapshotCache:
-    def __init__(self, ttl: float = 60.0, max_stale: float = 900.0, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, ttl: float = 60.0, max_stale: float = 900.0, max_entries: int = 256,
+                 clock: Callable[[], float] = time.monotonic):
         self.ttl = ttl
         self.max_stale = max_stale
+        self.max_entries = max_entries  # keys can embed caller-chosen values (days, token); never let them grow without bound
         self._clock = clock
         self._entries: Dict[str, Tuple[object, float]] = {}
         self._locks: Dict[str, threading.Lock] = {}
@@ -37,7 +39,14 @@ class SnapshotCache:
             return self._locks.setdefault(key, threading.Lock())
 
     def _store(self, key: str, value: object) -> None:
-        self._entries[key] = (value, self._clock())
+        with self._guard:
+            self._entries[key] = (value, self._clock())
+            while len(self._entries) > self.max_entries:
+                oldest = min(self._entries, key=lambda k: self._entries[k][1])
+                del self._entries[oldest]
+                lock = self._locks.get(oldest)
+                if lock is not None and not lock.locked():
+                    del self._locks[oldest]
 
     def clear(self) -> None:
         with self._guard:

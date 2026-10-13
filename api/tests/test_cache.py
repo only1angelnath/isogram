@@ -130,3 +130,65 @@ def test_stats_route_reads_once_per_snapshot(api, monkeypatch):
     assert api.get("/stats").status_code == 200
     assert api.get("/stats").status_code == 200
     assert len(reads) == 1
+
+
+def test_cache_is_bounded():
+    cache = SnapshotCache(ttl=60, max_stale=900, max_entries=3)
+    for i in range(10):
+        cache.get(f"k{i}", lambda i=i: i)
+    assert len(cache._entries) <= 3
+    assert cache.get("k9", lambda: "recomputed") == 9  # newest survived
+
+
+def test_metrics_series_are_snapshotted(api, monkeypatch):
+    import routes.metrics as metrics_route
+
+    reads = {"daily": 0, "tokens": 0}
+
+    def fake_daily(c, days):
+        reads["daily"] += 1
+        return []
+
+    def fake_tokens(c, days, token):
+        reads["tokens"] += 1
+        return []
+
+    monkeypatch.setattr(metrics_route, "fetch_network_daily", fake_daily)
+    monkeypatch.setattr(metrics_route, "fetch_pipeline_status", lambda c: {"data_through": None})
+    monkeypatch.setattr(metrics_route, "fetch_token_daily", fake_tokens)
+    for _ in range(2):
+        assert api.get("/metrics/network/daily?days=7").status_code == 200
+        assert api.get("/metrics/tokens/daily?days=7").status_code == 200
+    assert api.get("/metrics/network/daily?days=14").status_code == 200  # a different window is its own snapshot
+    assert reads == {"daily": 2, "tokens": 1}
+
+
+def test_large_responses_are_gzipped(api, monkeypatch):
+    import routes.projects as projects_route
+
+    many = [{"id": f"p{i}", "name": f"Project {i}", "category": "token", "contracts": [f"0x{i:040x}"],
+             "created_at": "2026-09-16T00:00:00+00:00"} for i in range(300)]
+    monkeypatch.setattr(projects_route, "fetch_projects", lambda c: many)
+    monkeypatch.setattr(projects_route, "fetch_all_latest_scores", lambda c: [])
+    monkeypatch.setattr(projects_route, "fetch_market_data", lambda c: [])
+    monkeypatch.setattr(projects_route, "fetch_holders", lambda c: [])
+    monkeypatch.setattr(projects_route, "fetch_socials", lambda c: [])
+    resp = api.get("/projects", headers={"Accept-Encoding": "gzip"})
+    assert resp.status_code == 200
+    assert resp.headers.get("content-encoding") == "gzip"
+    assert len(resp.json()) == 300  # the client decodes it transparently
+    assert resp.headers.get("access-control-expose-headers") or resp.headers.get("x-ratelimit-limit")
+
+
+def test_warm_targets_use_the_calls_the_dashboard_makes(monkeypatch):
+    import main
+
+    seen = []
+    monkeypatch.setattr(main.projects, "cached_project_summaries", lambda c: seen.append("projects"))
+    monkeypatch.setattr(main.network, "cached_network_summary", lambda c: seen.append("stats"))
+    monkeypatch.setattr(main.metrics, "network_daily", lambda days, client: seen.append(f"nd{days}"))
+    monkeypatch.setattr(main.metrics, "tokens_daily", lambda days, token, client: seen.append(f"td{days}:{token}"))
+    monkeypatch.setattr(main.metrics, "contracts_top", lambda days, limit, client: seen.append(f"top{days}:{limit}"))
+    for _label, call in main._warm_targets("c"):
+        call()
+    assert seen == ["projects", "stats", "nd7", "nd8", "nd14", "nd30", "td8:USDC", "td7:None", "td14:None", "td30:None", "top7:15"]

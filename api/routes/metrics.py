@@ -12,8 +12,11 @@ All read-only (docs/AUDIT.md). Backed by the rollups (docs/decisions/ADR-003).
 Days the pipeline did not cover are ABSENT from the series, never zero-filled.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from cache import snapshots
 from aggregate import (
     TOKEN_SYMBOLS,
     build_network_daily,
@@ -63,11 +66,19 @@ def pipeline_status(client=Depends(get_client)):
 def network_daily(days: int = Query(30, ge=1, le=90), client=Depends(get_client)):
     """Chain-wide daily totals: transactions, failure rate, USDC gas (6-decimal view),
     contract deployments, blocks, token transfers, distinct active senders."""
-    try:
-        data_through = (fetch_pipeline_status(client) or {}).get("data_through")
-    except Exception:  # freshness is advisory; never fail the series over it
-        data_through = None
-    return build_network_daily(fetch_network_daily(client, days), data_through=data_through)
+    def build():
+        # The freshness lookup and the series are independent reads: run them side by side.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_status = pool.submit(fetch_pipeline_status, client)
+            f_rows = pool.submit(fetch_network_daily, client, days)
+            rows = f_rows.result()
+            try:
+                data_through = (f_status.result() or {}).get("data_through")
+            except Exception:  # freshness is advisory; never fail the series over it
+                data_through = None
+        return build_network_daily(rows, data_through=data_through)
+
+    return snapshots.get(f"network_daily:{days}", build)
 
 
 @router.get("/metrics/tokens/daily", response_model=list[TokenDay])
@@ -85,7 +96,8 @@ def tokens_daily(
     EURC / USYC: their ERC-20 Transfer logs. Volumes are never added across tokens.
     Rows before 2026-10-05 re-ingestion cutover may use the superseded ERC-20-only definition.
     """
-    return build_token_daily(fetch_token_daily(client, days, _resolve_token(token)))
+    resolved = _resolve_token(token)
+    return snapshots.get(f"tokens_daily:{days}:{resolved}", lambda: build_token_daily(fetch_token_daily(client, days, resolved)))
 
 
 @router.get("/metrics/contracts/top", response_model=list[TopContract])
@@ -96,7 +108,7 @@ def contracts_top(
 ):
     """Top contracts by USDC gas over the window, with gas_share of all network gas
     and the owning project when one is tracked."""
-    return build_top_contracts(fetch_top_contracts(client, days, limit))
+    return snapshots.get(f"contracts_top:{days}:{limit}", lambda: build_top_contracts(fetch_top_contracts(client, days, limit)))
 
 
 @router.get("/projects/{project_id}/daily", response_model=list[ProjectDay])
@@ -113,3 +125,4 @@ def score_history(project_id: str, limit: int = Query(100, ge=1, le=500), client
     if fetch_project(client, project_id) is None:
         raise HTTPException(status_code=404, detail=f"No tracked project '{project_id}'")
     return build_score_history(fetch_score_history(client, project_id, limit))
+

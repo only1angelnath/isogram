@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from access import enforce_access
 from db import get_client
@@ -30,16 +31,31 @@ from routes import badge, gas, keys, metrics, network, projects, scores, tvl, su
 log = logging.getLogger("isogram.main")
 
 
+def _warm_targets(client):
+    """The exact calls the dashboard makes (same arguments, so the same cache keys)."""
+    yield "projects", lambda: projects.cached_project_summaries(client)
+    yield "stats", lambda: network.cached_network_summary(client)
+    for days in (7, 8, 14, 30):
+        yield f"network daily {days}", lambda days=days: metrics.network_daily(days=days, client=client)
+    yield "tokens daily USDC", lambda: metrics.tokens_daily(days=8, token="USDC", client=client)
+    for days in (7, 14, 30):
+        yield f"tokens daily {days}", lambda days=days: metrics.tokens_daily(days=days, token=None, client=client)
+    yield "top contracts", lambda: metrics.contracts_top(days=7, limit=15, client=client)
+
+
 def _keep_snapshots_warm(interval: float) -> None:
-    """Rebuild the /projects and /stats snapshots every `interval` seconds so a visitor arriving after a
+    """Rebuild the snapshots the dashboard reads every `interval` seconds so a visitor arriving after a
     quiet spell never pays for a cold rebuild (cache.py). Off unless WARM_CACHE_SECONDS is set."""
     while True:
         try:
             client = get_client()
-            projects.cached_project_summaries(client)
-            network.cached_network_summary(client)
+            for label, call in _warm_targets(client):
+                try:
+                    call()
+                except Exception:
+                    log.exception("cache warm-up of %s failed; will retry", label)
         except Exception:
-            log.exception("cache warm-up failed; will retry")
+            log.exception("cache warm-up could not start; will retry")
         time.sleep(interval)
 
 
@@ -57,7 +73,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Isogram API",
     description="The data truth layer for Arc — USDC gas/flow, TVL, and Arc Native Score.",
-    version="0.3.1",
+    version="0.3.2",
     lifespan=lifespan,
     # Identifies every caller and applies the tiered per-minute limit (access.py).
     dependencies=[Depends(enforce_access)],
@@ -70,6 +86,10 @@ app = FastAPI(
 # nothing authenticates via cookies (allow_credentials is off, and /admin
 # needs an X-Admin-Key header a foreign site cannot know), and POST /submit
 # is rate-limited and can only create a pending row for human review.
+# /projects alone is ~370 KB of JSON; compressed it is a tenth of that. Browsers and Node's fetch
+# (the dashboard's server) ask for gzip automatically.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
