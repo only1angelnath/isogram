@@ -7,6 +7,31 @@ function barStyle(value: number | null, max: number, color: string): React.CSSPr
   return { ["--w" as string]: `${w}%`, ["--bar" as string]: color };
 }
 
+function DayCard({ d, moved }: { d: NetworkDay; moved: number | null }) {
+  return (
+    <div className="iso-mrow flat" style={d.partial ? { opacity: 0.85 } : undefined}>
+      <span className="who">
+        <span className="top">
+          <span className="nm">{formatDay(d.day)}</span>
+          {d.partial && <span className="iso-pill dashed">partial</span>}
+          {d.source === "raw_backfill" && <span className="iso-pill dashed">early data</span>}
+        </span>
+        <span className="meta">{formatUsd(d.avg_gas_per_tx_usdc, { decimals: 4 })} gas per tx</span>
+      </span>
+      <span className="val">{formatCount(d.tx_count)}<small>transactions</small></span>
+      <span className="mstats" style={{ ["--n" as string]: 3 }}>
+        <span className="mstat"><i>failed</i><b><span className={`iso-pill ${failedTone(d.failed_rate)}`}>{formatPercent(d.failed_rate)}</span></b></span>
+        <span className="mstat"><i>gas (usdc)</i><b>{formatUsd(d.usdc_gas_paid, { decimals: 0 })}</b></span>
+        <span className="mstat"><i>active addr</i><b>{formatCompact(d.active_addresses)}</b></span>
+      </span>
+      <span className="mstats sec" style={{ ["--n" as string]: 3 }}>
+        <span className="mstat"><i>deployed</i><b>{formatCount(d.contract_creations)}</b></span>
+        <span className="mstat"><i>usdc moved</i><b>{formatCompact(moved)}</b></span>
+      </span>
+    </div>
+  );
+}
+
 export function DailyTable({ days, usdcByDay }: { days: NetworkDay[]; usdcByDay: Map<string, number | null> }) {
   const rows = [...days].reverse();
   const maxTx = Math.max(0, ...days.map((d) => d.tx_count ?? 0));
@@ -14,7 +39,17 @@ export function DailyTable({ days, usdcByDay }: { days: NetworkDay[]; usdcByDay:
   const maxUsdc = Math.max(0, ...days.map((d) => usdcByDay.get(d.day) ?? 0));
 
   return (
-    <div className="iso-table-wrap">
+    <>
+    <div className="iso-mlist">
+      {rows.slice(0, 7).map((d) => <DayCard key={d.day} d={d} moved={usdcByDay.get(d.day) ?? null} />)}
+      {rows.length > 7 && (
+        <details className="iso-more">
+          <summary>Show {rows.length - 7} earlier days</summary>
+          {rows.slice(7).map((d) => <DayCard key={d.day} d={d} moved={usdcByDay.get(d.day) ?? null} />)}
+        </details>
+      )}
+    </div>
+    <div className="iso-table-wrap has-list">
       <table className="iso-table">
         <thead>
           <tr>
@@ -45,5 +80,6 @@ export function DailyTable({ days, usdcByDay }: { days: NetworkDay[]; usdcByDay:
         </tbody>
       </table>
     </div>
+    </>
   );
 }

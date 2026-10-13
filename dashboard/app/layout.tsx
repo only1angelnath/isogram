@@ -26,9 +26,11 @@ const plexMono = IBM_Plex_Mono({
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#0c0c0e" };
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://isogram.vercel.app"),
   title: { default: "Isogram — the data truth layer for Arc", template: "%s · Isogram" },
   description: "Live Arc mainnet analytics: network activity, projects, tokens, DEX volume and DeFi scores.",
   openGraph: { title: "Isogram — the data truth layer for Arc", description: "Live Arc mainnet analytics: network activity, projects, tokens, DEX volume and DeFi scores.", type: "website", siteName: "Isogram" },
+  twitter: { card: "summary_large_image", title: "Isogram — the data truth layer for Arc", description: "Live Arc mainnet analytics: network activity, projects, tokens, DEX volume and DeFi scores." },
   // Per docs/BRANDING.md §2.3: 🔺 is the designated emoji fallback for
   // contexts that only support an emoji favicon, ahead of a rendered
   // multi-size favicon.ico from brand-assets/ being wired in.

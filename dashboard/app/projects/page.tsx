@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { getNetworkDaily, listProjects } from "@/lib/api";
 import { SegmentTable } from "@/components/SegmentTable";
 import { Pagination } from "@/components/Pagination";
+import { CsvButton } from "@/components/CsvButton";
 import { ColumnKey, SEGMENTS, segmentConfig, sortProjects, sumGas } from "@/lib/segments";
 import { paginate, parsePage, parseSort } from "@/lib/tableState";
 import { formatCompact, formatUsdCompact } from "@/lib/format";
@@ -55,6 +56,12 @@ export default async function ProjectsPage({ searchParams }: {
 
       <div className="section-head" style={{ marginBottom: 14 }}>
         <h2 style={{ fontSize: 22 }}>{cfg.label}</h2>
+        <CsvButton
+          label="All projects CSV"
+          filename="isogram-projects.csv"
+          columns={["id", "name", "segment", "category", "tier", "score", "tvl_usd", "usdc_gas_7d", "unique_users_7d", "tx_count_7d", "failed_tx_7d", "failed_rate_7d", "holders", "price_usd", "liquidity_usd", "volume_24h_usd", "market_quality", "scored_at"]}
+          rows={all.map((p) => [p.id, p.name, p.segment, p.category, p.tier, p.score, p.tvl_usd, p.usdc_gas_7d, p.unique_users_7d, p.tx_count_7d, p.failed_tx_7d, p.failed_rate_7d, p.holders, p.market?.price_usd, p.market?.liquidity_usd, p.market?.volume_24h_usd, p.market?.quality, p.computed_at])}
+        />
         <span className="iso-dim" style={{ fontSize: 14, flexBasis: "100%", margin: "-8px 0 0" }}>{cfg.blurb}</span>
       </div>
 
@@ -68,7 +75,7 @@ export default async function ProjectsPage({ searchParams }: {
       <Pagination paged={paged} basePath="/projects" query={pagerQuery} noun="projects" />
       <p className="pt-note">
         {thirdParty && <>Price, volume and liquidity are third-party data (GeckoTerminal). </>}
-        Auto-discovered projects are not endorsed. <Link href="/methodology#projects">How this works</Link>
+        Auto-discovered projects are not endorsed. <Link href="/docs/methodology#projects">How this works</Link>
       </p>
     </main>
   );

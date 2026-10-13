@@ -74,22 +74,26 @@ function MobileList({ projects, config, networkGas, startRank, sort }: {
         return (
           <Link key={p.id} href={`/projects/${p.id}`} className="iso-mrow">
             <Avatar name={p.name} />
-            <span className="top" style={{ minWidth: 0 }}>
-              <span className="nm">{p.name}</span>
-              {p.tier === "curated" && <span className="iso-pill good">verified</span>}
+            <span className="who">
+              <span className="top">
+                <span className="nm">{p.name}</span>
+                {p.tier === "curated" && <span className="iso-pill good">verified</span>}
+              </span>
+              <span className="meta">#{startRank + i} · {p.category ?? "unclassified"}</span>
             </span>
             <span className="val">
               {cell(primaryKey, p, networkGas)}
               <small>{COLUMN_LABELS[primaryKey]}</small>
             </span>
-            <span className="sub">
-              <span>#{startRank + i}</span>
-              <span>{p.category ?? "unclassified"}</span>
+            <span className="mstats" style={{ ["--n" as string]: others.length }}>
               {others.map((k) => (
-                <span key={k}>{SHORT[k] ?? COLUMN_LABELS[k]} <b style={k === "chg24h" && change !== null && change !== 0 ? { color: change > 0 ? "#5FC9C0" : "#FF5B2E" } : undefined}>{cell(k, p, networkGas)}</b></span>
+                <span key={k} className="mstat">
+                  <i>{SHORT[k] ?? COLUMN_LABELS[k]}</i>
+                  <b style={k === "chg24h" && change !== null && change !== 0 ? { color: change > 0 ? "var(--data-2)" : "var(--accent)" } : undefined}>{cell(k, p, networkGas)}</b>
+                </span>
               ))}
-              {v === null && primaryKey === "price" && <span>no market data</span>}
             </span>
+            {v === null && primaryKey === "price" && <span className="meta" style={{ gridColumn: "1 / -1" }}>No market data yet</span>}
           </Link>
         );
       })}

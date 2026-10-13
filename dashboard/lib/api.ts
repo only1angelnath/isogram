@@ -32,7 +32,12 @@ function getApiBaseUrl(): string {
 }
 
 async function getJson<T>(path: string): Promise<T | null> {
+  // The dashboard's own server identifies itself with an internal key (Vercel env API_KEY, which must equal
+  // one entry of INTERNAL_API_KEYS on the API). Without it every page view would count against the
+  // anonymous per-IP limit of Vercel's shared egress addresses. Never a NEXT_PUBLIC_ variable.
+  const apiKey = process.env.API_KEY;
   const res = await fetch(`${getApiBaseUrl()}${path}`, {
+    headers: apiKey ? { "X-API-Key": apiKey } : undefined,
     // Deliberately not cached/ISR'd: this dashboard's build should never
     // depend on the API being reachable at BUILD time (a real risk on
     // Vercel if the API redeploys around the same time) — every page using
@@ -58,6 +63,11 @@ export async function listVenues(): Promise<Venue[] | null> {
 export async function listProjects(): Promise<ProjectSummary[]> {
   const data = await getJson<ProjectSummary[]>("/projects");
   return data ?? [];
+}
+
+/** Which tracked project lists this contract address; null = none (or the API could not tell). */
+export async function getProjectRefByAddress(address: string): Promise<{ id: string; name: string } | null> {
+  return getJson<{ id: string; name: string }>(`/projects/by-address/${encodeURIComponent(address)}`);
 }
 
 export async function getProject(projectId: string): Promise<ProjectDetail | null> {
@@ -116,4 +126,3 @@ export function getApiBaseUrlForBadge(): string {
   // is safe without a NEXT_PUBLIC_ variable.
   return getApiBaseUrl();
 }
-

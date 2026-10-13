@@ -72,7 +72,7 @@ export default async function DexesPage({ searchParams }: {
 
       <p className="pt-note">
         GeckoTerminal, refreshed hourly{newest ? `, updated ${formatRelativeAge(newest)}` : ""}. Anomalous pools are left out and shown as &ldquo;excluded&rdquo;;
-        &ldquo;&ge;&rdquo; marks a lower bound. <Link href="/methodology#venues">Details</Link>
+        &ldquo;&ge;&rdquo; marks a lower bound. <Link href="/docs/methodology#venues">Details</Link>
       </p>
     </main>
   );

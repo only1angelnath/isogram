@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getNetworkDaily, getProject, getProjectDaily, getScoreHistory } from "@/lib/api";
 import { InteractiveChart } from "@/components/InteractiveChart";
 import { ScoreBadge } from "@/components/ScoreBadge";
+import { CsvButton } from "@/components/CsvButton";
 import { ScoreGauge } from "@/components/ScoreGauge";
 import { Avatar } from "@/components/Avatar";
 import { fillCalendar } from "@/lib/series";
@@ -129,6 +130,17 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
 
       {cfg.showsScore && project.score === null && (
         <p className="notice">Not scored yet. Scores refresh every four hours.</p>
+      )}
+
+      {daily.length > 0 && (
+        <div className="csv-row">
+          <CsvButton
+            label="CSV · 30d"
+            filename={`isogram-${project.id}-daily.csv`}
+            columns={["day_utc", "tx_count", "failed_tx_count", "failed_rate", "usdc_gas", "unique_users"]}
+            rows={daily.map((d) => [d.day, d.tx_count, d.failed_tx_count, d.failed_rate, d.usdc_gas, d.unique_users])}
+          />
+        </div>
       )}
 
       {daily.length > 0 && (

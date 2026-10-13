@@ -5,6 +5,7 @@ import { InteractiveChart } from "@/components/InteractiveChart";
 import { DailyTable } from "@/components/DailyTable";
 import { TopContractsTable } from "@/components/TopContractsTable";
 import { StatusPill } from "@/components/StatusPill";
+import { CsvButton } from "@/components/CsvButton";
 import { fillCalendar } from "@/lib/series";
 import { firstParam } from "@/lib/tableState";
 import { formatCompact, formatCount, formatDay, formatDuration, formatPercent, formatUsd } from "@/lib/format";
@@ -98,7 +99,15 @@ export default async function NetworkPage({ searchParams }: { searchParams: Prom
             </ChartCard>
           </div>
 
-          <div className="section-head"><h2 style={{ fontSize: 22 }}>Daily breakdown</h2></div>
+          <div className="section-head">
+            <h2 style={{ fontSize: 22 }}>Daily breakdown</h2>
+            <CsvButton
+              label={`CSV · ${range}d`}
+              filename={`isogram-network-daily-${range}d.csv`}
+              columns={["day_utc", "status", "tx_count", "failed_tx_count", "failed_rate", "usdc_gas_paid", "avg_gas_per_tx_usdc", "contract_creations", "active_addresses", "usdc_moved"]}
+              rows={days.map((d) => [d.day, d.partial ? "partial" : "final", d.tx_count, d.failed_tx_count, d.failed_rate, d.usdc_gas_paid, d.avg_gas_per_tx_usdc, d.contract_creations, d.active_addresses, usdcByDay.get(d.day) ?? null])}
+            />
+          </div>
           <div style={{ marginBottom: 40 }}>
             <DailyTable days={days.slice(-14)} usdcByDay={usdcByDay} />
           </div>
@@ -107,6 +116,11 @@ export default async function NetworkPage({ searchParams }: { searchParams: Prom
 
       <div className="section-head">
         <h2 style={{ fontSize: 22 }}>Top contracts by gas · 7 days</h2>
+        <CsvButton
+          filename="isogram-top-contracts-7d.csv"
+          columns={["contract_address", "project_id", "project_name", "category", "tx_count", "failed_tx_count", "failed_rate", "usdc_gas", "gas_share"]}
+          rows={top.map((c) => [c.contract_address, c.project_id, c.project_name, c.category, c.tx_count, c.failed_tx_count, c.failed_rate, c.usdc_gas, c.gas_share])}
+        />
       </div>
       {top.length === 0 ? (
         <p className="no-data">No contract activity recorded yet.</p>
@@ -120,7 +134,7 @@ export default async function NetworkPage({ searchParams }: { searchParams: Prom
       )}
 
       <p className="pt-note" style={{ marginTop: 28 }}>
-        Hatched bars are partial days; dotted gaps are days not covered. Definitions: <Link href="/methodology#network">methodology</Link>.
+        Hatched bars are partial days; dotted gaps are days not covered. Definitions: <Link href="/docs/methodology#network">methodology</Link>.
       </p>
     </main>
   );

@@ -1,16 +1,20 @@
 "use client";
 
-// SearchBox.tsx - find a tracked project by name, symbol, id or category. The list is loaded once,
+// SearchBox.tsx - find a tracked project by name, symbol, id or category, or paste a contract address
+// to jump to the project that owns it. The list is loaded once,
 // on first focus, from /api/search (a slim server-side projection of /projects), so nothing is
 // fetched for visitors who never search and the browser never needs the API's own URL.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 interface Item { id: string; name: string; category: string | null; tx: number }
 
 const MAX = 8;
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+type Lookup = { state: "loading" } | { state: "found"; id: string; name: string } | { state: "none" } | { state: "error" };
 
 export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
   const router = useRouter();
@@ -20,6 +24,8 @@ export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState(0);
   const loading = useRef(false);
+  const [lookup, setLookup] = useState<Lookup | null>(null);
+  const lookups = useRef(new Map<string, Lookup>());
   const box = useRef<HTMLDivElement>(null);
 
   async function load() {
@@ -35,9 +41,34 @@ export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
     }
   }
 
+  const address = ADDRESS_RE.test(q.trim()) ? q.trim().toLowerCase() : null;
+
+  useEffect(() => {
+    if (!address) { setLookup(null); return; }
+    const cached = lookups.current.get(address);
+    if (cached) { setLookup(cached); return; }
+    const ctl = new AbortController();
+    setLookup({ state: "loading" });
+    (async () => {
+      let out: Lookup;
+      try {
+        const res = await fetch(`/api/search?address=${address}`, { signal: ctl.signal });
+        if (res.status === 404) out = { state: "none" };
+        else if (!res.ok) throw new Error(String(res.status));
+        else { const j = (await res.json()) as { id: string; name: string }; out = { state: "found", id: j.id, name: j.name }; }
+        lookups.current.set(address, out);
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        out = { state: "error" };
+      }
+      setLookup(out);
+    })();
+    return () => ctl.abort();
+  }, [address]);
+
   const results = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t || !items) return [];
+    if (!t || !items || address) return [];
     const scored: { it: Item; rank: number }[] = [];
     for (const it of items) {
       const name = it.name.toLowerCase();
@@ -46,7 +77,7 @@ export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
     }
     scored.sort((a, b) => a.rank - b.rank || b.it.tx - a.it.tx);
     return scored.slice(0, MAX).map((s) => s.it);
-  }, [q, items]);
+  }, [q, items, address]);
 
   function go(it: Item | undefined) {
     if (!it) return;
@@ -71,7 +102,7 @@ export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
         inputMode="search"
         autoComplete="off"
         spellCheck={false}
-        placeholder="Search projects"
+        placeholder="Search or paste a contract"
         aria-label="Search projects"
         aria-controls={listId}
         aria-expanded={open && q.trim() !== ""}
@@ -81,13 +112,30 @@ export function SearchBox({ idSuffix = "" }: { idSuffix?: string }) {
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
-          else if (e.key === "Enter") { e.preventDefault(); go(results[sel]); }
+          else if (e.key === "Enter") {
+            e.preventDefault();
+            if (address) { if (lookup?.state === "found") go({ id: lookup.id, name: lookup.name, category: null, tx: 0 }); }
+            else go(results[sel]);
+          }
           else if (e.key === "Escape") { setOpen(false); (e.target as HTMLInputElement).blur(); }
         }}
       />
       {open && q.trim() !== "" && (
         <div className="search-results" id={listId} role="listbox">
-          {failed ? (
+          {address ? (
+            lookup?.state === "found" ? (
+              <Link href={`/projects/${lookup.id}`} role="option" aria-selected="true" onClick={() => { setOpen(false); setQ(""); }}>
+                <span className="nm">{lookup.name}</span>
+                <span className="iso-pill">contract</span>
+              </Link>
+            ) : lookup?.state === "none" ? (
+              <div className="empty">No tracked project lists this contract.</div>
+            ) : lookup?.state === "error" ? (
+              <div className="empty">Lookup is unavailable right now.</div>
+            ) : (
+              <div className="empty">Looking up contract…</div>
+            )
+          ) : failed ? (
             <div className="empty">Search is unavailable right now.</div>
           ) : !items ? (
             <div className="empty">Loading…</div>

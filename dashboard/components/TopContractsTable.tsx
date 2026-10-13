@@ -16,7 +16,36 @@ export function TopContractsTable({ contracts }: { contracts: TopContract[] }) {
   const maxShare = Math.max(0, ...contracts.map((c) => c.gas_share ?? 0));
 
   return (
-    <div className="iso-table-wrap">
+    <>
+    <div className="iso-mlist">
+      {contracts.map((c, i) => (
+        <div key={c.contract_address} className="iso-mrow flat">
+          <span className="who">
+            <span className="top">
+              <span className="rk">{i + 1}</span>
+              <Avatar name={c.project_name ?? c.contract_address.slice(2)} />
+              {c.project_id ? (
+                <Link href={`/projects/${c.project_id}`} className="nm">{c.project_name}</Link>
+              ) : (
+                <span className="nm iso-dim">Unclassified contract</span>
+              )}
+            </span>
+            <span className="meta">
+              {c.project_id ? (c.category ?? "project") : "untracked"} ·{" "}
+              <a href={`${EXPLORER}${c.contract_address}`} target="_blank" rel="noreferrer">{shortAddress(c.contract_address)} ↗</a>
+            </span>
+          </span>
+          <span className="val">{formatUsd(c.usdc_gas, { decimals: c.usdc_gas !== null && c.usdc_gas < 10 ? 4 : 2 })}<small>usdc gas</small></span>
+          <span className="mstats" style={{ ["--n" as string]: 3 }}>
+            <span className="mstat"><i>transactions</i><b>{formatCount(c.tx_count)}</b></span>
+            <span className="mstat"><i>failed</i><b><span className={`iso-pill ${failedTone(c.failed_rate)}`}>{formatPercent(c.failed_rate)}</span></b></span>
+            <span className="mstat"><i>gas share</i><b>{formatPercent(c.gas_share)}</b></span>
+          </span>
+          <span className="mbar" aria-hidden="true"><span style={{ width: `${c.gas_share !== null && maxShare > 0 ? Math.max(2, (c.gas_share / maxShare) * 100) : 0}%` }} /></span>
+        </div>
+      ))}
+    </div>
+    <div className="iso-table-wrap has-list">
       <table className="iso-table">
         <thead>
           <tr><th>contract</th><th>type</th><th>transactions</th><th>failed</th><th>gas (usdc)</th><th>share of network gas</th></tr>
@@ -54,5 +83,6 @@ export function TopContractsTable({ contracts }: { contracts: TopContract[] }) {
         </tbody>
       </table>
     </div>
+    </>
   );
 }

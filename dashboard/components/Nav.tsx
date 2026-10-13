@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/projects", label: "Projects" },
   { href: "/dexes", label: "DEXes" },
   { href: "/gas", label: "Gas" },
+  { href: "/docs", label: "Docs" },
 ];
 
 export function Nav() {
@@ -50,7 +51,6 @@ export function Nav() {
         {LINKS.map((l) => (
           <Link key={l.href} href={l.href} className="drawer-link" aria-current={current(l.href)}>{l.label}</Link>
         ))}
-        <Link href="/methodology" className="drawer-link" aria-current={current("/methodology")}>Methodology</Link>
       </div>
     </header>
   );

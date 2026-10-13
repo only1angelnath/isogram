@@ -37,14 +37,16 @@ export function VenueTable({ venues, startRank = 1, sort }: {
     <>
     <div className="iso-mlist">
       {venues.map((v, i) => (
-        <div key={v.dex_id} className="iso-mrow" style={{ gridTemplateColumns: "1fr auto" }}>
-          <span className="top"><span className="nm">{v.name}</span><span className={`iso-pill${v.kind === "launchpad" ? " good" : ""}`}>{v.kind === "launchpad" ? "launch" : "dex"}</span></span>
+        <div key={v.dex_id} className="iso-mrow flat">
+          <span className="who">
+            <span className="top"><span className="nm">{v.name}</span><span className={`iso-pill${v.kind === "launchpad" ? " good" : ""}`}>{v.kind === "launchpad" ? "launch" : "dex"}</span></span>
+            <span className="meta">#{startRank + i}{v.top_pool_name ? ` · top pool ${v.top_pool_name}` : ""}</span>
+          </span>
           <span className="val">{v.truncated ? "≥ " : ""}{formatUsdCompact(v.volume_24h_usd)}<small>24h volume</small></span>
-          <span className="sub" style={{ gridColumn: "1 / -1" }}>
-            <span>#{startRank + i}</span>
-            <span>share <b>{formatPercent(v.share)}</b></span>
-            <span>pools <b>{v.active_pools.toLocaleString("en-US")}</b></span>
-            {v.excluded_volume_usd > 0 && <span>+{formatUsdCompact(v.excluded_volume_usd)} excluded</span>}
+          <span className="mstats" style={{ ["--n" as string]: 3 }}>
+            <span className="mstat"><i>share</i><b>{formatPercent(v.share)}</b></span>
+            <span className="mstat"><i>active pools</i><b>{v.active_pools.toLocaleString("en-US")}</b></span>
+            <span className="mstat"><i>excluded</i><b>{v.excluded_volume_usd > 0 ? formatUsdCompact(v.excluded_volume_usd) : "—"}</b></span>
           </span>
         </div>
       ))}
