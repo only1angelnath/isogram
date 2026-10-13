@@ -2,8 +2,9 @@
 main.py — FastAPI app entrypoint.
 
 Isogram is a public data API (see docs/PRD.md, docs/AUDIT.md). Every route is
-a read (GET) except two: POST /submit (rate-limited, only ever creates a
-'pending' review row) and the /admin/* routes (gated by X-Admin-Key). The
+a read (GET) except three: POST /submit (rate-limited, only ever creates a
+'pending' review row), POST /keys (rate-limited, only ever creates an API key row) and the
+/admin/* routes (gated by X-Admin-Key). The
 dashboard and badge embeds are thin clients of this API.
 
 Run locally:
@@ -12,16 +13,19 @@ Run locally:
 Deploy: Railway/Render free tier (see docs/ARCHITECTURE.md §2.3).
 """
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from access import enforce_access
 from models import HealthResponse
-from routes import badge, gas, metrics, network, projects, scores, tvl, submit, admin, venues
+from routes import badge, gas, keys, metrics, network, projects, scores, tvl, submit, admin, venues
 
 app = FastAPI(
     title="Isogram API",
     description="The data truth layer for Arc — USDC gas/flow, TVL, and Arc Native Score.",
-    version="0.2.0",
+    version="0.3.0",
+    # Identifies every caller and applies the tiered per-minute limit (access.py).
+    dependencies=[Depends(enforce_access)],
 )
 
 # CORS is deliberately wide open, not a dev-mode leftover: this is a public
@@ -36,7 +40,18 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
+    # Lets browser code read the rate-limit headers (and back off on 429).
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Tier", "Retry-After"],
 )
+
+@app.middleware("http")
+async def rate_limit_headers(request: Request, call_next):
+    """Copy the headers access.enforce_access prepared onto the response, errors included."""
+    response = await call_next(request)
+    for name, value in getattr(request.state, "rate_headers", {}).items():
+        response.headers.setdefault(name, value)
+    return response
+
 
 app.include_router(projects.router)
 app.include_router(gas.router)
@@ -47,6 +62,8 @@ app.include_router(network.router)
 app.include_router(metrics.router)
 app.include_router(submit.router)
 app.include_router(admin.router)
+app.include_router(keys.router)
+app.include_router(keys.admin_router)
 app.include_router(venues.router)
 
 
@@ -60,4 +77,5 @@ def root():
 @app.api_route("/health", methods=["GET", "HEAD"], response_model=HealthResponse)
 def health():
     return {"status": "ok"}
+
 

@@ -1,12 +1,14 @@
 """
-routes/projects.py — GET /projects, GET /projects/{project_id}
+routes/projects.py — GET /projects, GET /projects/{project_id}, GET /projects/by-address/{address}
 
 Read-only, per docs/AUDIT.md.
 """
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from aggregate import build_all_summaries, build_project_summary, latest_score_by_project, primary_contract
 from db import (
@@ -19,6 +21,7 @@ from db import (
     fetch_market_data,
     fetch_market_for_address,
     fetch_project,
+    fetch_project_ref_by_address,
     fetch_projects,
     get_client,
 )
@@ -99,6 +102,25 @@ def list_projects(client=Depends(get_client)):
                                socials_rows=_socials_rows(client))
 
 
+class ProjectRef(BaseModel):
+    id: str
+    name: str
+
+
+_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+@router.get("/by-address/{address}", response_model=ProjectRef)
+def get_project_by_address(address: str, client=Depends(get_client)):
+    """Which tracked project owns this contract address (used by the dashboard's search box)."""
+    if not _ADDRESS_RE.match(address):
+        raise HTTPException(status_code=400, detail="Not a valid 0x address")
+    ref = fetch_project_ref_by_address(client, address)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="No tracked project has this contract")
+    return {"id": ref["id"], "name": ref["name"]}
+
+
 @router.get("/{project_id}", response_model=ProjectDetail)
 def get_project(project_id: str, client=Depends(get_client)):
     """One project's detail, including its known contract addresses."""
@@ -116,4 +138,5 @@ def get_project(project_id: str, client=Depends(get_client)):
         "contracts": project.get("contracts") or [],
         "created_at": project.get("created_at"),
     }
+
 

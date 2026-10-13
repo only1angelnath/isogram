@@ -92,6 +92,42 @@ def test_get_project_not_found(client, monkeypatch):
     assert resp.status_code == 404
 
 
+def test_project_by_address_found(client, monkeypatch):
+    import routes.projects as projects_route
+
+    seen = {}
+
+    def fake(c, address):
+        seen["address"] = address
+        return {"id": "isogram", "name": "Isogram"}
+
+    monkeypatch.setattr(projects_route, "fetch_project_ref_by_address", fake)
+    addr = "0x" + "AB" * 20
+    resp = client.get(f"/projects/by-address/{addr}")
+    assert resp.status_code == 200
+    assert resp.json() == {"id": "isogram", "name": "Isogram"}
+    assert seen["address"] == addr  # lowercasing happens in db.py, which owns the storage convention
+
+
+def test_project_by_address_not_found(client, monkeypatch):
+    import routes.projects as projects_route
+
+    monkeypatch.setattr(projects_route, "fetch_project_ref_by_address", lambda c, a: None)
+    resp = client.get("/projects/by-address/0x" + "00" * 20)
+    assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("bad", ["0x123", "isogram", "0x" + "zz" * 20, "0x" + "00" * 21])
+def test_project_by_address_rejects_malformed(client, monkeypatch, bad):
+    import routes.projects as projects_route
+
+    def boom(c, a):
+        raise AssertionError("must not query the database for a malformed address")
+
+    monkeypatch.setattr(projects_route, "fetch_project_ref_by_address", boom)
+    assert client.get(f"/projects/by-address/{bad}").status_code == 400
+
+
 def test_gas_top(client, monkeypatch):
     import routes.gas as gas_route
 
@@ -209,12 +245,26 @@ def test_stats_endpoint_no_network_stats_yet_returns_nulls(client, monkeypatch):
     assert body["total_tx_7d"] is None
 
 
+# The ONLY routes allowed to accept a write method. Each is gated or limited and can only create a
+# review row, an API key row, or (admin) change review / key state. Anything new must be added here on purpose.
+ALLOWED_WRITES = {
+    ("POST", "/submit"),
+    ("POST", "/keys"),
+    ("POST", "/admin/classify"),
+    ("POST", "/admin/submissions/{submission_id}/review"),
+    ("POST", "/admin/keys/{key_id}/revoke"),
+}
+
+
 def test_no_route_accepts_a_write():
     """
-    Per docs/AUDIT.md: this is a read-only public data service. Confirm no
-    route in the app is registered for a write HTTP method.
+    Per docs/AUDIT.md: this is a read-only public data service apart from a short, explicit allowlist.
+    Reads the OpenAPI schema, which lists every route regardless of how the FastAPI version nests routers.
     """
-    write_methods = {"POST", "PUT", "PATCH", "DELETE"}
-    for route in app.routes:
-        methods = getattr(route, "methods", set()) or set()
-        assert not (methods & write_methods), f"{route.path} exposes a write method: {methods}"
+    write_methods = {"post", "put", "patch", "delete"}
+    found = set()
+    for path, ops in app.openapi()["paths"].items():
+        for method in ops:
+            if method in write_methods:
+                found.add((method.upper(), path))
+    assert found == ALLOWED_WRITES, f"unexpected write routes: {found ^ ALLOWED_WRITES}"

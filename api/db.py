@@ -153,6 +153,19 @@ def fetch_project(client: Client, project_id: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
+def fetch_project_ref_by_address(client: Client, address: str) -> dict | None:
+    """{id, name} of the project that lists `address` among its contracts, or None.
+    `projects.contracts` stores lowercase addresses (docs/SCHEMA.md), so the lookup is lowercased."""
+    result = (
+        client.table("projects")
+        .select("id, name")
+        .contains("contracts", [address.lower()])
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
 def fetch_all_latest_scores(client: Client) -> list[dict]:
     """
     The LATEST project_scores row per project, via the latest_project_scores
@@ -279,4 +292,5 @@ def fetch_pipeline_status(client: Client) -> dict | None:
     the last applied block), checkpoint_updated_at. None if unavailable."""
     rows = client.rpc("pipeline_status", {}).execute().data or []
     return rows[0] if rows else None
+
 
