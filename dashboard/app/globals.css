@@ -525,7 +525,7 @@ header, main, footer { position: relative; z-index: 1; }
 .iso-csv {
   display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 14px; border-radius: 999px;
   font: 12px var(--font-mono), monospace; color: var(--ink-dim); background: transparent;
-  border: 1px solid var(--line-strong); cursor: pointer; transition: color .15s, border-color .15s;
+  border: 1px solid var(--line-strong); cursor: pointer; transition: color .15s, border-color .15s; text-decoration: none;
 }
 .iso-csv:hover:not(:disabled) { color: var(--ink); border-color: rgba(255,255,255,.4); }
 .iso-csv:disabled { opacity: .4; cursor: default; }
