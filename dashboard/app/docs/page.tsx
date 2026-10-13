@@ -28,7 +28,7 @@ export default function DocsOverview() {
         <ul>
           <li><b>Builders</b> who want to see their own contracts and their peers, and embed a badge in a README.</li>
           <li><b>The Arc ecosystem team and reviewers</b> who want a fast read on chain health.</li>
-          <li><b>Anyone curious</b> who wants a DeFiLlama-style way to browse a brand-new chain.</li>
+          <li><b>Anyone curious</b> who wants a clear, open way to browse a brand-new chain.</li>
         </ul>
 
         <h2 id="how">How it works</h2>
@@ -39,12 +39,12 @@ export default function DocsOverview() {
           <div role="listitem"><b>API</b><span>Read-only, rate limited, open CORS</span></div>
           <div role="listitem"><b>Dashboard, badge, your app</b><span>All clients of the same API</span></div>
         </div>
-        <ol>
-          <li>A worker on GitHub Actions follows the chain tip, reading each block&apos;s receipts, and aggregates in memory into per-day rollups. It stores no per-transaction rows. The rollups and the checkpoint are written in one atomic step, so a crash can never count a block twice or skip one.</li>
-          <li>A scoring job runs every four hours, reads the rollups, reads live balances for DeFi contracts and computes TVL and the Arc Native Score.</li>
-          <li>Hourly, the worker also refreshes third-party market data and DEX volume; holder counts and links refresh more slowly.</li>
-          <li>A small FastAPI service is the only reader of the database. The dashboard and the badge are ordinary clients of it, and so can you be.</li>
-        </ol>
+        <p>
+          Isogram follows Arc mainnet block by block and keeps one summary row per metric per UTC day, never
+          individual transactions. Those daily numbers are combined with live contract balances to produce TVL and
+          the Arc Native Score, and with third-party market data where it exists. One read-only API serves all of it.
+          The dashboard and the badge are ordinary clients of that API, and so can you be.
+        </p>
 
         <h2 id="sources">Where the numbers come from</h2>
         <div className="tbl">
