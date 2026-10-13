@@ -161,4 +161,3 @@ cd scoring && python -m pytest -q
 | `supabase/migrations/` | Postgres schema and SQL functions |
 | `ops/` | One-off SQL used during backfills |
 | `.github/workflows/` | Ingestion chain and scoring schedule |
-| `bot/` | Early Telegram bot prototype. Not part of this submission and not deployed. |

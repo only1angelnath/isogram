@@ -5,9 +5,6 @@ name: Gap backfill (rollups)
 # (it points historical_backfill_state at the range). Manual start only; the job re-dispatches
 # itself until the range is complete, then stops on its own. Uses its OWN checkpoint
 # (apply_backfill_batch), so it can run alongside live ingestion.
-#
-# NOTE: the older backfill.yml / backfill_historical.py wrote raw per-transaction rows, which
-# no longer exist (storage) - do not run that one.
 
 on:
   workflow_dispatch: {}

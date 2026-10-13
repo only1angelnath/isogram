@@ -42,8 +42,9 @@ auto-promotes or waits for a human.
 Also added Dexscreener as a second, independent, keyless classification
 source alongside CoinGecko/GeckoTerminal (which are the same underlying
 onchain data — CoinGecko acquired GeckoTerminal — just paid vs. free tier;
-this now falls back to the free public endpoint when COINGECKO_PRO_API_KEY
-isn't set, instead of skipping classification entirely). Arkham was
+a key (COINGECKO_PRO_API_KEY) is required: the keyless public endpoint now
+returns 401, so without one that lookup returns None and the candidate falls
+through to Dexscreener or manual review). Arkham was
 considered and dropped: paid-only, and no confirmed Arc coverage, unlike
 CoinGecko/GeckoTerminal/Dexscreener which reportedly do have real Arc data
 — confirmed directly: GeckoTerminal's network ID for Arc is literally
@@ -392,8 +393,8 @@ def fetch_trending_pool_candidates(db=None) -> int:
 def _gecko_token_info(address: str) -> dict | None:
     """
     Query CoinGecko/GeckoTerminal's onchain token-info endpoint — paid
-    pro-api if COINGECKO_PRO_API_KEY is set (higher rate limit), else the
-    free public endpoint (same data, keyless, more rate-limited). Returns
+    pro-api when COINGECKO_PRO_API_KEY is set. The keyless public endpoint now
+    returns 401, so without a key this returns None. Returns
     None on 404 (not indexed), any non-200, or any request failure; never
     raises, since a classification miss should just leave the candidate
     for the next source (or manual review), not break the ingestion run.
