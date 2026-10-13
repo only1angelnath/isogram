@@ -13,17 +13,52 @@ Run locally:
 Deploy: Railway/Render free tier (see docs/ARCHITECTURE.md §2.3).
 """
 
+import logging
+import os
+import threading
+import time
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from access import enforce_access
+from db import get_client
 from models import HealthResponse
 from routes import badge, gas, keys, metrics, network, projects, scores, tvl, submit, admin, venues
+
+log = logging.getLogger("isogram.main")
+
+
+def _keep_snapshots_warm(interval: float) -> None:
+    """Rebuild the /projects and /stats snapshots every `interval` seconds so a visitor arriving after a
+    quiet spell never pays for a cold rebuild (cache.py). Off unless WARM_CACHE_SECONDS is set."""
+    while True:
+        try:
+            client = get_client()
+            projects.cached_project_summaries(client)
+            network.cached_network_summary(client)
+        except Exception:
+            log.exception("cache warm-up failed; will retry")
+        time.sleep(interval)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        interval = float(os.environ.get("WARM_CACHE_SECONDS", "0"))
+    except ValueError:
+        interval = 0.0
+    if interval >= 30:
+        threading.Thread(target=_keep_snapshots_warm, args=(interval,), name="cache-warm", daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="Isogram API",
     description="The data truth layer for Arc — USDC gas/flow, TVL, and Arc Native Score.",
-    version="0.3.0",
+    version="0.3.1",
+    lifespan=lifespan,
     # Identifies every caller and applies the tiered per-minute limit (access.py).
     dependencies=[Depends(enforce_access)],
 )

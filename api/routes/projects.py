@@ -6,6 +6,7 @@ Read-only, per docs/AUDIT.md.
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -25,6 +26,7 @@ from db import (
     fetch_projects,
     get_client,
 )
+from cache import snapshots
 from models import ProjectDetail, ProjectSummary
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -92,14 +94,32 @@ def _market_row(client, project: dict):
         return None
 
 
+def load_project_summaries(client) -> list:
+    """Build the full project list. The five table reads are independent, so they run side by side:
+    the request takes as long as the slowest one instead of the sum of all five."""
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_projects = pool.submit(fetch_projects, client)
+        f_scores = pool.submit(fetch_all_latest_scores, client)
+        f_market = pool.submit(_market_rows, client)
+        f_holders = pool.submit(_holders_rows, client)
+        f_socials = pool.submit(_socials_rows, client)
+        return build_all_summaries(
+            f_projects.result(), f_scores.result(), f_market.result(),
+            holders_rows=f_holders.result(), socials_rows=f_socials.result(),
+        )
+
+
+def cached_project_summaries(client) -> list:
+    """Snapshot of load_project_summaries (see cache.py): at most a minute old, rebuilt in the background."""
+    return snapshots.get("projects", lambda: load_project_summaries(client))
+
+
 @router.get("", response_model=list[ProjectSummary])
 def list_projects(client=Depends(get_client)):
     """Every tracked project with its latest score, TVL, and gas figures (plus third-party
-    market data for token and stablecoin projects)."""
-    projects = fetch_projects(client)
-    scores = fetch_all_latest_scores(client)
-    return build_all_summaries(projects, scores, _market_rows(client), holders_rows=_holders_rows(client),
-                               socials_rows=_socials_rows(client))
+    market data for token and stablecoin projects). Served from a snapshot that is at most a
+    minute old; the data only changes when an ingestion or scoring run finishes."""
+    return cached_project_summaries(client)
 
 
 class ProjectRef(BaseModel):
