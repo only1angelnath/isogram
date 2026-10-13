@@ -3,7 +3,7 @@ import { getNetworkDaily, getNetworkStats, getPipelineStatus, getTokensDaily, li
 import { SegmentTable } from "@/components/SegmentTable";
 import { Sparkline } from "@/components/Sparkline";
 import { StatusPill } from "@/components/StatusPill";
-import { formatCompact, formatUsdCompact } from "@/lib/format";
+import { formatCompact, formatDay, formatUsd, formatUsdCompact } from "@/lib/format";
 import { fillCalendar } from "@/lib/series";
 import { rankProjects, segmentConfig, sumGas } from "@/lib/segments";
 
@@ -23,6 +23,23 @@ export default async function HomePage() {
     fillCalendar(days, (d) => ({ value: pick(d), partial: d.partial })).map((p) => p.value);
   const networkGas = sumGas(days);
 
+  // Headline value for each hero row = the latest COMPLETED day (never the partial day), with a
+  // change vs the day before only when that day is the adjacent calendar day and also complete.
+  const headline = (pick: (d: (typeof days)[number]) => number | null) => {
+    const pts = fillCalendar(days, (d) => ({ value: pick(d), partial: d.partial }));
+    let i = pts.length - 1;
+    while (i >= 0 && (pts[i].partial || pts[i].value === null)) i--;
+    if (i < 0) return null;
+    const cur = pts[i];
+    const prev = i > 0 && !pts[i - 1].partial ? pts[i - 1].value : null;
+    const change = prev !== null && prev !== 0 && cur.value !== null ? (cur.value - prev) / prev : null;
+    return { value: cur.value as number, day: cur.label, change };
+  };
+  const usdcMoved = (d: (typeof days)[number]) => usdcByDay.get(d.day) ?? null;
+  const gasHead = headline((d) => d.usdc_gas_paid);
+  const moveHead = headline(usdcMoved);
+  const addrHead = headline((d) => d.active_addresses);
+
   const defi = segmentConfig("defi");
   const tokens = segmentConfig("token");
   const topDefi = rankProjects(projects.filter((p) => p.segment === "defi"), defi.sortBy, networkGas).slice(0, 5);
@@ -31,31 +48,29 @@ export default async function HomePage() {
   return (
     <main>
       <div className="container hero">
-        <div>
+        <div className="hero-copy">
           <h1>
             The data <span className="hl">truth layer</span> for Arc.
           </h1>
           <p>Live network activity, projects, tokens and DEX volume for Arc mainnet, with every figure sourced and labelled.</p>
-          <Link href="/projects" className="btn">Explore projects</Link>
+          <div className="hero-cta">
+            <Link href="/projects" className="btn">Explore projects</Link>
+            <Link href="/docs/api" className="btn-ghost">API docs</Link>
+          </div>
         </div>
 
         <div className="chart-panel">
           <div className="cap">
             <StatusPill status={status} />
+            <span className="cap-range">last 7 days</span>
           </div>
           <div className="mini-metrics">
-            <div className="mini">
-              <div className="mini-label">Gas paid <span>USDC / day</span></div>
-              <Sparkline values={series((d) => d.usdc_gas_paid)} lastPartial={lastPartial} color="var(--accent)" ariaLabel="USDC gas paid per day on Arc" />
-            </div>
-            <div className="mini">
-              <div className="mini-label">USDC movement <span>per day</span></div>
-              <Sparkline values={series((d) => usdcByDay.get(d.day) ?? null)} lastPartial={lastPartial} color="var(--data-2)" ariaLabel="USDC movement per day on Arc" />
-            </div>
-            <div className="mini">
-              <div className="mini-label">Active addresses <span>per day</span></div>
-              <Sparkline values={series((d) => d.active_addresses)} lastPartial={lastPartial} color="#f2f0ea" ariaLabel="Active addresses per day on Arc" />
-            </div>
+            <HeroRow label="Gas paid" unit="USDC / day" head={gasHead} fmt={fmtGas}
+              values={series((d) => d.usdc_gas_paid)} lastPartial={lastPartial} color="var(--accent)" aria="USDC gas paid per day on Arc" />
+            <HeroRow label="USDC movement" unit="per day" head={moveHead} fmt={formatUsdCompact}
+              values={series(usdcMoved)} lastPartial={lastPartial} color="var(--data-2)" aria="USDC movement per day on Arc" />
+            <HeroRow label="Active addresses" unit="per day" head={addrHead} fmt={formatCompact}
+              values={series((d) => d.active_addresses)} lastPartial={lastPartial} color="#f2f0ea" aria="Active addresses per day on Arc" />
           </div>
         </div>
       </div>
@@ -94,6 +109,38 @@ function Stat({ big, lbl }: { big: string; lbl: string }) {
     <div className="stat">
       <span className="big">{big}</span>
       <span className="lbl">{lbl}</span>
+    </div>
+  );
+}
+
+function fmtGas(v: number | null): string {
+  if (v === null) return "—";
+  if (v >= 1000) return formatUsdCompact(v);
+  return formatUsd(v, { decimals: v < 1 ? 4 : 2 });
+}
+
+interface Head { value: number; day: string; change: number | null }
+
+function HeroRow({ label, unit, head, fmt, values, lastPartial, color, aria }: {
+  label: string; unit: string; head: Head | null; fmt: (v: number | null) => string;
+  values: (number | null)[]; lastPartial: boolean; color: string; aria: string;
+}) {
+  const ch = head?.change ?? null;
+  return (
+    <div className="mini">
+      <div className="mini-text">
+        <div className="mini-label">{label} <span>{unit}</span></div>
+        <div className="mini-value">{head ? fmt(head.value) : "—"}</div>
+        <div className="mini-sub">
+          {head ? formatDay(head.day) : "no completed day yet"}
+          {ch !== null && (
+            <b className={ch >= 0 ? "up" : "down"}> {ch >= 0 ? "+" : "−"}{Math.abs(ch * 100).toFixed(1)}%</b>
+          )}
+        </div>
+      </div>
+      <div className="mini-chart">
+        <Sparkline values={values} lastPartial={lastPartial} color={color} height={56} ariaLabel={aria} />
+      </div>
     </div>
   );
 }

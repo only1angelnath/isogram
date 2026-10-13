@@ -197,37 +197,59 @@ header, main, footer { position: relative; z-index: 1; }
 /* ---------------------------------------------------------------------- hero */
 
 .hero {
-  padding-top: clamp(40px, 7vw, 84px);
-  display: grid; grid-template-columns: 1.1fr 1fr; gap: clamp(24px, 4vw, 48px); align-items: center;
+  padding-top: clamp(32px, 5vw, 64px);
+  display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 72px); align-items: center;
 }
 
-.hero h1 { font-size: clamp(38px, 5vw, 66px); line-height: 1.02; margin: 0 0 18px; }
+.hero-copy { min-width: 0; }
+.hero h1 { font-size: clamp(40px, 5.6vw, 76px); line-height: 1.0; letter-spacing: -0.03em; margin: 0 0 22px; text-wrap: balance; }
 .hero h1 .hl { color: var(--accent); }
-.hero p { font-size: 17px; line-height: 1.6; color: var(--ink-dim); max-width: 440px; margin: 0 0 28px; }
+.hero p { font-size: 17px; line-height: 1.6; color: var(--ink-dim); max-width: 460px; margin: 0 0 30px; text-wrap: pretty; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 10px; }
 
 .chart-panel {
   background: var(--panel); border: 1px solid var(--line-strong); border-radius: 16px;
-  padding: 20px 22px 18px;
+  padding: 16px 22px 8px; width: 100%; max-width: 520px; justify-self: end; min-width: 0;
 }
 
-.chart-panel .cap { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); letter-spacing: 0.02em; margin-bottom: 14px; }
+.chart-panel .cap {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); letter-spacing: 0.04em;
+  padding-bottom: 14px; border-bottom: 1px solid var(--line);
+}
+.cap-range { text-transform: uppercase; opacity: .8; }
 
-.live { display: inline-flex; align-items: center; gap: 8px; color: var(--good); }
-.live-dot { position: relative; margin: 0 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--good); display: inline-block; }
+.live { display: inline-flex; align-items: center; gap: 10px; color: var(--good); }
+.live-dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--good); display: inline-block; flex: none; }
 .live-dot::after {
-  content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid var(--good);
+  content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1.5px solid var(--good);
   animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
-.mini-metrics { display: flex; flex-direction: column; gap: 18px; }
-.mini { padding-top: 14px; border-top: 1px solid var(--line); }
-.mini:first-child { border-top: none; padding-top: 0; }
-.mini-label { font-family: var(--font-mono); font-size: 13px; color: var(--ink); margin-bottom: 8px; }
-.mini-label span { color: var(--ink-dim); font-size: 11.5px; margin-left: 6px; }
+.mini-metrics { display: flex; flex-direction: column; }
+.mini {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 46%); gap: 18px; align-items: center;
+  padding: 16px 0; border-top: 1px solid var(--line);
+}
+.mini:first-child { border-top: none; }
+.mini-label { font-family: var(--font-mono); font-size: 12px; color: var(--ink-dim); margin-bottom: 6px; }
+.mini-label span { opacity: .7; font-size: 11px; margin-left: 4px; }
+.mini-value { font-family: var(--font-mono); font-weight: 500; font-size: clamp(1.4rem, 2.4vw, 1.9rem); line-height: 1.1; white-space: nowrap; }
+.mini-sub { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); margin-top: 6px; }
+.mini-sub b { font-weight: 500; }
+.mini-sub .up { color: var(--good); }
+.mini-sub .down { color: var(--bad, #ff6b5e); }
+.mini-chart { min-width: 0; }
 
 @media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; }
-  .hero p { font-size: 16px; }
+  .hero { grid-template-columns: 1fr; padding-top: 28px; }
+  .hero h1 { font-size: clamp(38px, 11vw, 56px); }
+  .hero p { font-size: 16px; margin-bottom: 24px; }
+  .chart-panel { max-width: none; justify-self: stretch; }
+}
+@media (max-width: 480px) {
+  .mini-label span { display: block; margin: 2px 0 0; }
+  .mini { gap: 14px; }
 }
 
 /* ---------------------------------------------------------------- stat strip */
