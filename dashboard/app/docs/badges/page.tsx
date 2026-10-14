@@ -18,7 +18,7 @@ export default function BadgesPage() {
       </div>
       <div className="prose">
         <h2 id="embed">Embed it</h2>
-        <p>Find your project&apos;s id in its page address (<code>/projects/<b>your-project-id</b></code>) or search by contract on the dashboard. Then paste one of these.</p>
+        <p>Find your project&apos;s id in its page address (<code>/projects/<b>your-project-id</b></code>) or search by contract on the dashboard. Every scored project page also has a ready-to-copy embed box. Not listed yet? <a href="/submit">Submit your project</a>. Then paste one of these.</p>
         <CodeBlock label="Markdown (README)" code={`[![Arc Native Score](${url})](https://isogram.vercel.app/projects/YOUR-PROJECT-ID)`} />
         <CodeBlock label="HTML" code={`<a href="https://isogram.vercel.app/projects/YOUR-PROJECT-ID"><img src="${url}" alt="Arc Native Score" height="20"></a>`} />
 

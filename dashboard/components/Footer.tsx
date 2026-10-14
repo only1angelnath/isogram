@@ -7,6 +7,7 @@ export function Footer() {
       <nav aria-label="Footer">
         <Link href="/docs">Docs</Link>
         <Link href="/docs/api">API</Link>
+        <Link href="/submit">Submit a project</Link>
         <a href="https://github.com/only1angelnath/isogram" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
     </footer>

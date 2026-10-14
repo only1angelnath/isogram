@@ -43,6 +43,7 @@ export default async function ProjectsPage({ searchParams }: {
       <div className="page-head">
         <div className="eyebrow">Projects</div>
         <h1>Everything tracked on Arc.</h1>
+        <p className="lede">Missing yours? <Link href="/submit">Submit it for review</Link>.</p>
       </div>
 
       <div className="iso-cards compact">

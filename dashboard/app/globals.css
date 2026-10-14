@@ -586,6 +586,16 @@ header, main, footer { position: relative; z-index: 1; }
 .keyform .btn:disabled { opacity: .5; cursor: default; }
 .kf-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-dim); }
 .kf-error { margin: 12px 0 0; font-size: 13px; color: var(--accent); }
+.keyform.wide { max-width: 560px; }
+.keyform select, .keyform textarea { width: 100%; border-radius: 10px; border: 1px solid var(--line-strong); background: #101013; color: var(--ink); padding: 0 14px; font: 15px var(--font-body), sans-serif; }
+.keyform select { min-height: 44px; }
+.keyform textarea { padding: 12px 14px; resize: vertical; min-height: 84px; }
+.keyform select:focus, .keyform textarea:focus { outline: 2px solid rgba(255, 91, 46, 0.5); outline-offset: 1px; }
+.keyform input[aria-invalid="true"] { border-color: var(--accent); }
+.kf-ok { margin: 10px 0 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.kf-ok a { text-decoration: underline; }
+.embed .code { margin: 0 0 10px; }
+
 
 .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 18px 0 8px; }
 .flow > div { border: 1px solid var(--line-strong); border-radius: 12px; padding: 12px; background: var(--panel); position: relative; }
