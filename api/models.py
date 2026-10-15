@@ -141,6 +141,23 @@ class SubmissionResponse(BaseModel):
     status: str
     created_at: str
 
+class AdminSubmission(BaseModel):
+    """What a reviewer sees. Admin-only: includes the submitter's contact, which the public
+    SubmissionResponse above deliberately never returns."""
+
+    id: int
+    contract_address: str
+    proposed_name: Optional[str] = None
+    proposed_category: Optional[str] = None
+    socials: dict = {}
+    submitter_contact: Optional[str] = None
+    note: Optional[str] = None
+    status: str
+    reviewed_at: Optional[str] = None
+    reviewer_note: Optional[str] = None
+    created_at: str
+
+
 class AdminClassifyRequest(BaseModel):
     contract_address: str
     category: str

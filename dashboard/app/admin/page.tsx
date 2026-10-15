@@ -1,47 +1,16 @@
-// app/admin/page.tsx — client component: password gate, then the
-// submission review queue + manual classify form, all via
-// /api/admin-proxy (never calling FastAPI's /admin/* directly from the
-// browser — see that route's comment on why).
+// app/admin/page.tsx - the curation desk. A client component: password gate, then four panels
+// (submissions, discovered contracts, classify, API keys), all through /api/admin-proxy and never
+// calling FastAPI's /admin/* directly (see that route for why).
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { CategoryRow, SessionExpiredError, adminFetch } from "@/components/admin/adminApi";
+import { SubmissionsPanel } from "@/components/admin/SubmissionsPanel";
+import { DiscoveredPanel } from "@/components/admin/DiscoveredPanel";
+import { ClassifyPanel, Prefill } from "@/components/admin/ClassifyPanel";
+import { KeysPanel } from "@/components/admin/KeysPanel";
 
-type Submission = {
-  id: number;
-  contract_address: string;
-  proposed_name: string | null;
-  proposed_category: string | null;
-  socials: Record<string, string>;
-  submitter_contact: string | null;
-  note: string | null;
-  status: string;
-  created_at: string;
-};
-
-type DiscoveredContract = {
-  contract_address: string;
-  call_count: number;
-  category: string | null;
-  gecko_name: string | null;
-  status: string;
-  first_seen: string;
-  last_seen: string;
-};
-
-async function proxy<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api/admin-proxy/${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  if (res.status === 401) {
-    throw new Error("SESSION_EXPIRED");
-  }
-  const body = await res.json();
-  if (!res.ok) {
-    throw new Error(body.detail || body.error || `Request failed (${res.status})`);
-  }
-  return body as T;
-}
+type Tab = "submissions" | "discovered" | "classify" | "keys";
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
@@ -49,46 +18,32 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
 
-  const [submissions, setSubmissions] = useState<Submission[] | null>(null);
-  const [unclassified, setUnclassified] = useState<DiscoveredContract[] | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("submissions");
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [counts, setCounts] = useState<{ submissions: number | null; discovered: number | null; keys: number | null }>({ submissions: null, discovered: null, keys: null });
+  const [prefill, setPrefill] = useState<Prefill | null>(null);
 
-  const [classifyAddress, setClassifyAddress] = useState("");
-  const [classifyCategory, setClassifyCategory] = useState("");
-  const [classifyName, setClassifyName] = useState("");
-
-  function handleSessionExpired() {
+  const expired = useCallback(() => {
     setAuthed(false);
-    setLoginError("Session expired — please log in again.");
-  }
+    setLoginError("Session expired. Please log in again.");
+  }, []);
 
-  async function loadAll() {
-    try {
-      const [subs, disc] = await Promise.all([
-        proxy<Submission[]>("submissions"),
-        proxy<DiscoveredContract[]>("discovered?status=unclassified&limit=30"),
-      ]);
-      setSubmissions(subs);
-      setUnclassified(disc);
-      setActionError(null);
-    } catch (err) {
-      if (err instanceof Error && err.message === "SESSION_EXPIRED") {
-        handleSessionExpired();
-      } else {
-        setActionError(err instanceof Error ? err.message : "Failed to load");
-      }
-    }
-  }
+  const setCount = useCallback((key: "submissions" | "discovered" | "keys") => (n: number) => setCounts((c) => (c[key] === n ? c : { ...c, [key]: n })), []);
+  const onSubCount = useCallback((n: number) => setCount("submissions")(n), [setCount]);
+  const onDiscCount = useCallback((n: number) => setCount("discovered")(n), [setCount]);
+  const onKeyCount = useCallback((n: number) => setCount("keys")(n), [setCount]);
 
   useEffect(() => {
-    if (authed) {
-      loadAll();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed]);
+    if (!authed) return;
+    adminFetch<CategoryRow[]>("categories")
+      .then(setCategories)
+      .catch((e) => { if (e instanceof SessionExpiredError) expired(); });
+    // Counts for the tabs that are not open yet (the open Submissions panel reports its own).
+    adminFetch<unknown[]>("discovered?status=unclassified&limit=100").then((r) => onDiscCount(r.length)).catch(() => {});
+    adminFetch<{ revoked_at: string | null }[]>("keys").then((r) => onKeyCount(r.filter((k) => !k.revoked_at).length)).catch(() => {});
+  }, [authed, expired, onDiscCount, onKeyCount]);
 
-  async function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoggingIn(true);
     setLoginError(null);
@@ -111,146 +66,50 @@ export default function AdminPage() {
     }
   }
 
-  async function handleReview(id: number, decision: "approve" | "reject") {
-    setBusyId(`sub-${id}`);
-    setActionError(null);
-    try {
-      await proxy(`submissions/${id}/review`, {
-        method: "POST",
-        body: JSON.stringify({ decision }),
-      });
-      await loadAll();
-    } catch (err) {
-      if (err instanceof Error && err.message === "SESSION_EXPIRED") {
-        handleSessionExpired();
-      } else {
-        setActionError(err instanceof Error ? err.message : "Review failed");
-      }
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function handleClassify(e: React.FormEvent) {
-    e.preventDefault();
-    setBusyId("classify-form");
-    setActionError(null);
-    try {
-      await proxy("classify", {
-        method: "POST",
-        body: JSON.stringify({
-          contract_address: classifyAddress,
-          category: classifyCategory,
-          name: classifyName || null,
-        }),
-      });
-      setClassifyAddress("");
-      setClassifyCategory("");
-      setClassifyName("");
-      await loadAll();
-    } catch (err) {
-      if (err instanceof Error && err.message === "SESSION_EXPIRED") {
-        handleSessionExpired();
-      } else {
-        setActionError(err instanceof Error ? err.message : "Classify failed");
-      }
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   if (!authed) {
     return (
-      <main style={{ maxWidth: 360, margin: "4rem auto", padding: "0 1rem" }}>
-        <h1>Isogram Admin</h1>
-        <form onSubmit={handleLogin}>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Admin password"
-            autoFocus
-            style={{ width: "100%", padding: "0.5rem", marginBottom: "0.5rem" }}
-          />
-          <button type="submit" disabled={loggingIn} style={{ width: "100%", padding: "0.5rem" }}>
-            {loggingIn ? "Logging in…" : "Log in"}
-          </button>
+      <main className="container section first">
+        <form className="panel keyform" onSubmit={handleLogin}>
+          <h3>Isogram admin</h3>
+          <label htmlFor="adm-pw">Password</label>
+          <input id="adm-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Admin password" autoFocus autoComplete="current-password" />
+          {loginError && <p className="kf-error" role="alert">{loginError}</p>}
+          <button type="submit" className="btn" disabled={loggingIn || !password}>{loggingIn ? "Logging in…" : "Log in"}</button>
         </form>
-        {loginError && <p style={{ color: "#FF5B2E" }}>{loginError}</p>}
       </main>
     );
   }
 
+  const badge = (n: number | null) => (n === null ? null : <span className="adm-count">{n >= 100 ? "100+" : n}</span>);
+
   return (
-    <main style={{ maxWidth: 900, margin: "2rem auto", padding: "0 1rem" }}>
-      <h1>Isogram Admin</h1>
-      {actionError && <p style={{ color: "#FF5B2E" }}>{actionError}</p>}
+    <main className="container section first">
+      <div className="page-head">
+        <div className="eyebrow">Admin</div>
+        <h1>Curation desk.</h1>
+        <p className="lede">Review submissions, classify contracts and manage API keys. Nothing here is public until the next discovery run promotes it.</p>
+      </div>
 
-      <section style={{ marginTop: "2rem" }}>
-        <h2>Pending submissions ({submissions?.length ?? "…"})</h2>
-        {submissions?.length === 0 && <p>Nothing pending.</p>}
-        {submissions?.map((s) => (
-          <div key={s.id} style={{ border: "1px solid #333", padding: "1rem", marginBottom: "0.5rem" }}>
-            <div><strong>{s.proposed_name || s.contract_address}</strong></div>
-            <div style={{ fontFamily: "monospace", fontSize: "0.85em" }}>{s.contract_address}</div>
-            <div>Proposed category: {s.proposed_category || "—"}</div>
-            {s.note && <div>Note: {s.note}</div>}
-            {s.submitter_contact && <div>Contact: {s.submitter_contact}</div>}
-            <div style={{ marginTop: "0.5rem" }}>
-              <button
-                disabled={busyId === `sub-${s.id}`}
-                onClick={() => handleReview(s.id, "approve")}
-                style={{ marginRight: "0.5rem" }}
-              >
-                Approve
-              </button>
-              <button disabled={busyId === `sub-${s.id}`} onClick={() => handleReview(s.id, "reject")}>
-                Reject
-              </button>
-            </div>
-          </div>
+      <div className="adm-tabs" role="tablist" aria-label="Admin sections">
+        {([
+          ["submissions", "Submissions", counts.submissions],
+          ["discovered", "Discovered", counts.discovered],
+          ["classify", "Classify", null],
+          ["keys", "API keys", counts.keys],
+        ] as [Tab, string, number | null][]).map(([id, label, n]) => (
+          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}{badge(n)}</button>
         ))}
-      </section>
+      </div>
 
-      <section style={{ marginTop: "2rem" }}>
-        <h2>Unclassified, high call-count contracts</h2>
-        {unclassified?.length === 0 && <p>None right now.</p>}
-        {unclassified?.map((c) => (
-          <div key={c.contract_address} style={{ fontFamily: "monospace", fontSize: "0.9em" }}>
-            {c.contract_address} — {c.call_count} calls — last seen {c.last_seen}
-          </div>
-        ))}
-      </section>
-
-      <section style={{ marginTop: "2rem" }}>
-        <h2>Manual classify</h2>
-        <form onSubmit={handleClassify}>
-          <input
-            placeholder="0x contract address"
-            value={classifyAddress}
-            onChange={(e) => setClassifyAddress(e.target.value)}
-            style={{ display: "block", width: "100%", padding: "0.5rem", marginBottom: "0.5rem" }}
-          />
-          <input
-            placeholder="category (e.g. dex, token, infra)"
-            value={classifyCategory}
-            onChange={(e) => setClassifyCategory(e.target.value)}
-            style={{ display: "block", width: "100%", padding: "0.5rem", marginBottom: "0.5rem" }}
-          />
-          <input
-            placeholder="name (optional)"
-            value={classifyName}
-            onChange={(e) => setClassifyName(e.target.value)}
-            style={{ display: "block", width: "100%", padding: "0.5rem", marginBottom: "0.5rem" }}
-          />
-          <button type="submit" disabled={busyId === "classify-form"}>
-            {busyId === "classify-form" ? "Saving…" : "Classify"}
-          </button>
-        </form>
-        <p style={{ fontSize: "0.85em", opacity: 0.7 }}>
-          Promotes to a tracked project on the next scheduled discovery run, not immediately.
-        </p>
-      </section>
+      <div className="adm-body">
+        {tab === "submissions" && <SubmissionsPanel categories={categories} onExpired={expired} onCount={onSubCount} />}
+        {tab === "discovered" && (
+          <DiscoveredPanel onExpired={expired} onCount={onDiscCount}
+            onClassify={(address, name) => { setPrefill({ address, name, nonce: Date.now() }); setTab("classify"); }} />
+        )}
+        {tab === "classify" && <ClassifyPanel categories={categories} prefill={prefill} onExpired={expired} onSaved={() => setPrefill(null)} />}
+        {tab === "keys" && <KeysPanel onExpired={expired} onCount={onKeyCount} />}
+      </div>
     </main>
   );
 }

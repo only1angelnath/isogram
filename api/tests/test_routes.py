@@ -251,6 +251,7 @@ ALLOWED_WRITES = {
     ("POST", "/submit"),
     ("POST", "/keys"),
     ("POST", "/admin/classify"),
+    ("POST", "/admin/discovered/{address}/reject"),
     ("POST", "/admin/submissions/{submission_id}/review"),
     ("POST", "/admin/keys/{key_id}/revoke"),
 }
