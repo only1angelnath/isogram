@@ -226,3 +226,21 @@ def test_every_admin_route_needs_the_key(desk):
     for method, path in [("get", "/admin/categories"), ("get", "/admin/submissions"), ("get", "/admin/discovered"),
                          ("post", f"/admin/discovered/{ADDR}/reject")]:
         assert getattr(c, method)(path).status_code == 401
+
+
+def test_restore_sends_a_dismissed_contract_back_to_unclassified_only(desk):
+    """Restore never jumps to needs_review: a person must choose a category again before anything is promoted."""
+    db = _DB(discovered_contracts=[
+        {"contract_address": ADDR, "status": "rejected", "category": "token"},
+        {"contract_address": OTHER, "status": "needs_review", "category": "dex"},
+    ])
+    c = desk(db)
+    r = c.post(f"/admin/discovered/{ADDR}/restore", headers=HDR)
+    assert r.status_code == 200 and r.json()["restored_to"] == "unclassified"
+    (table, op, payload, filters), = db.writes
+    assert payload["status"] == "unclassified" and "category" not in payload and filters == {"contract_address": ADDR}
+    assert c.post(f"/admin/discovered/{OTHER}/restore", headers=HDR).status_code == 409
+    assert c.post("/admin/discovered/0x" + "33" * 20 + "/restore", headers=HDR).status_code == 404
+    assert c.post("/admin/discovered/nope/restore", headers=HDR).status_code == 422
+    assert c.post(f"/admin/discovered/{ADDR}/restore").status_code == 401
+    assert len(db.writes) == 1

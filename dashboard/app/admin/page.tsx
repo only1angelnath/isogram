@@ -17,6 +17,7 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
 
   const [tab, setTab] = useState<Tab>("submissions");
   const [categories, setCategories] = useState<CategoryRow[]>([]);
@@ -43,10 +44,23 @@ export default function AdminPage() {
     adminFetch<{ revoked_at: string | null }[]>("keys").then((r) => onKeyCount(r.filter((k) => !k.revoked_at).length)).catch(() => {});
   }, [authed, expired, onDiscCount, onKeyCount]);
 
+  async function signOut() {
+    try {
+      await fetch("/api/admin-logout", { method: "POST" });
+    } catch { /* the cookie also expires on its own after 12 hours */ }
+    setCounts({ submissions: null, discovered: null, keys: null });
+    setPrefill(null);
+    setTab("submissions");
+    setLoginError(null);
+    setSignedOut(true);
+    setAuthed(false);
+  }
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoggingIn(true);
     setLoginError(null);
+    setSignedOut(false);
     try {
       const res = await fetch("/api/admin-login", {
         method: "POST",
@@ -74,6 +88,7 @@ export default function AdminPage() {
           <label htmlFor="adm-pw">Password</label>
           <input id="adm-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Admin password" autoFocus autoComplete="current-password" />
           {loginError && <p className="kf-error" role="alert">{loginError}</p>}
+          {signedOut && <p className="adm-ok" role="status">Signed out.</p>}
           <button type="submit" className="btn" disabled={loggingIn || !password}>{loggingIn ? "Logging in…" : "Log in"}</button>
         </form>
       </main>
@@ -84,10 +99,13 @@ export default function AdminPage() {
 
   return (
     <main className="container section first">
-      <div className="page-head">
-        <div className="eyebrow">Admin</div>
-        <h1>Curation desk.</h1>
-        <p className="lede">Review submissions, classify contracts and manage API keys. Nothing here is public until the next discovery run promotes it.</p>
+      <div className="adm-headrow">
+        <div className="page-head">
+          <div className="eyebrow">Admin</div>
+          <h1>Curation desk.</h1>
+          <p className="lede">Review submissions, classify contracts and manage API keys. Nothing here is public until the next discovery run promotes it.</p>
+        </div>
+        <button type="button" className="adm-mini" onClick={signOut}>Sign out</button>
       </div>
 
       <div className="adm-tabs" role="tablist" aria-label="Admin sections">

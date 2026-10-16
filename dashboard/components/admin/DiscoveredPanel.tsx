@@ -47,6 +47,19 @@ export function DiscoveredPanel({ onExpired, onCount, onClassify }: {
     }
   }
 
+  async function restore(address: string) {
+    setBusy(address);
+    try {
+      await adminFetch(`discovered/${address}/restore`, { method: "POST" });
+      await load();
+    } catch (e) {
+      if (e instanceof SessionExpiredError) onExpired();
+      else setError(errorText(e, "Could not restore it."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const q = filter.trim().toLowerCase();
   const shown = (rows ?? []).filter((r) => !q || r.contract_address.toLowerCase().includes(q) || (r.gecko_name ?? "").toLowerCase().includes(q));
 
@@ -63,7 +76,7 @@ export function DiscoveredPanel({ onExpired, onCount, onClassify }: {
       <p className="iso-dim adm-sub">
         {view === "unclassified" && "Busy contracts that no source could identify, most active first. Classify the real ones, dismiss the junk."}
         {view === "needs_review" && "Classified and queued. They become projects on the next discovery run."}
-        {view === "rejected" && "Dismissed contracts. They stay out of the dashboard."}
+        {view === "rejected" && "Dismissed by you, or rejected automatically (for example look-alike names). Restoring sends a contract back to Unclassified for a fresh decision."}
       </p>
       <input className="adm-search" type="search" placeholder="Filter by address or name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter contracts" />
       {error && <p className="kf-error" role="alert">{error}</p>}
@@ -80,7 +93,11 @@ export function DiscoveredPanel({ onExpired, onCount, onClassify }: {
               <span className="adm-time">last seen {timeAgo(c.last_seen)}</span>
             </header>
             <p className="adm-stats"><b className="mono">{c.call_count.toLocaleString("en-US")}</b> calls · first seen {timeAgo(c.first_seen)}</p>
-            {view !== "rejected" && (
+            {view === "rejected" ? (
+              <div className="adm-actions">
+                <button type="button" className="btn-ghost adm-ghost" disabled={busy === c.contract_address} onClick={() => restore(c.contract_address)}>{busy === c.contract_address ? "Restoring…" : "Restore"}</button>
+              </div>
+            ) : (
               <div className="adm-actions">
                 <button type="button" className="btn" onClick={() => onClassify(c.contract_address, c.gecko_name ?? "")}>{view === "needs_review" ? "Reclassify" : "Classify"}</button>
                 <button type="button" className="btn-ghost adm-ghost" disabled={busy === c.contract_address} onClick={() => dismiss(c.contract_address)}>{busy === c.contract_address ? "Dismissing…" : "Dismiss"}</button>

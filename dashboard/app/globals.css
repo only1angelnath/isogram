@@ -684,3 +684,6 @@ header, main, footer { position: relative; z-index: 1; }
   .adm-actions .btn, .adm-actions .btn-ghost { flex: 1 1 140px; justify-content: center; }
   .adm-card-head { flex-direction: column; gap: 6px; }
 }
+
+.adm-headrow { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.adm-headrow .adm-mini { flex: none; margin-top: 4px; min-height: 40px; padding: 0 14px; }

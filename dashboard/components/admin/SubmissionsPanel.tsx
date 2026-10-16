@@ -5,12 +5,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  CategoryRow, SessionExpiredError, Submission, adminFetch, errorText, safeHttpUrl, suggestCategory, timeAgo, xUrl,
+  CategoryRow, SessionExpiredError, Submission, adminFetch, contactHref, errorText, safeHttpUrl, suggestCategory, timeAgo, xUrl,
 } from "@/components/admin/adminApi";
 import { Addr, CategorySelect, Consequence, TrackedBadge } from "@/components/admin/ui";
 
 type View = "pending" | "approved" | "rejected";
 interface PanelProps { categories: CategoryRow[]; onExpired: () => void; onCount: (n: number) => void }
+
+/** The submitter's contact, as a reply link when it is an email or Telegram handle. */
+function Contact({ s }: { s: Submission }) {
+  const text = s.submitter_contact;
+  if (!text) return <>—</>;
+  const href = contactHref(text, s.proposed_name);
+  return href ? <a href={href} target={href.startsWith("mailto:") ? undefined : "_blank"} rel="noreferrer noopener">{text} ↗</a> : <>{text}</>;
+}
 
 function Details({ s }: { s: Submission }) {
   const site = safeHttpUrl(s.socials?.website);
@@ -20,7 +28,7 @@ function Details({ s }: { s: Submission }) {
       <div><dt>Submitter says</dt><dd>{s.proposed_category || "—"}</dd></div>
       <div><dt>Website</dt><dd>{site ? <a href={site} target="_blank" rel="noreferrer noopener">{site.replace(/^https:\/\//, "").replace(/\/$/, "")} ↗</a> : (s.socials?.website ? <span className="iso-dim">{s.socials.website} (not https, not linked)</span> : "—")}</dd></div>
       <div><dt>X</dt><dd>{x ? <a href={x} target="_blank" rel="noreferrer noopener">{s.socials?.x} ↗</a> : (s.socials?.x || "—")}</dd></div>
-      <div><dt>Contact</dt><dd>{s.submitter_contact || "—"}</dd></div>
+      <div><dt>Contact</dt><dd><Contact s={s} /></dd></div>
       {s.note && <div className="wide"><dt>Note</dt><dd>{s.note}</dd></div>}
     </dl>
   );
@@ -142,6 +150,7 @@ export function SubmissionsPanel({ categories, onExpired, onCount }: PanelProps)
                 </div>
                 <span className="adm-time" title={s.reviewed_at ?? ""}>{timeAgo(s.reviewed_at)}</span>
               </header>
+              {s.submitter_contact && <p className="adm-note">Contact: <Contact s={s} /></p>}
               {s.reviewer_note && <p className="adm-note">Note: {s.reviewer_note}</p>}
             </article>
           ),

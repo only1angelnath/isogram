@@ -132,3 +132,19 @@ export function xUrl(v: string | undefined | null): string | null {
   const h = (v ?? "").trim().replace(/^@/, "");
   return /^[A-Za-z0-9_]{1,15}$/.test(h) ? `https://x.com/${h}` : null;
 }
+
+/**
+ * A link to reply to a submitter: mailto: for an email address, t.me for an @handle or t.me link,
+ * otherwise null (shown as plain text). Only plain, validated forms are linked.
+ */
+export function contactHref(contact: string | null, project: string | null): string | null {
+  const c = (contact ?? "").trim();
+  if (!c) return null;
+  if (/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(c)) {
+    const subject = encodeURIComponent(`Your Isogram submission${project ? `: ${project}` : ""}`);
+    return `mailto:${c}?subject=${subject}`;
+  }
+  const viaLink = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]{5,32})\/?$/i.exec(c);
+  const handle = viaLink ? viaLink[1] : c.startsWith("@") ? c.slice(1) : "";
+  return /^[A-Za-z0-9_]{5,32}$/.test(handle) ? `https://t.me/${handle}` : null;
+}

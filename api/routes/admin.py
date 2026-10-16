@@ -182,6 +182,30 @@ def reject_discovered(address: str, client=Depends(get_write_client)):
     return {"status": "ok", "contract_address": address}
 
 
+@router.post("/discovered/{address}/restore")
+def restore_discovered(address: str, client=Depends(get_write_client)):
+    """Undo a dismissal: a rejected contract goes back to 'unclassified' so it can get a fresh human
+    decision. It never goes straight back to 'needs_review', so nothing is promoted without someone
+    choosing a category again. Also works on contracts discovery rejected on its own (for example look-alike names)."""
+    address = _clean_address(address)
+    found = (
+        client.table("discovered_contracts")
+        .select("contract_address, status")
+        .eq("contract_address", address)
+        .limit(1)
+        .execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="No discovered contract with that address")
+    if found.data[0]["status"] != "rejected":
+        raise HTTPException(status_code=409, detail="Only dismissed contracts can be restored")
+    now = datetime.now(timezone.utc).isoformat()
+    client.table("discovered_contracts").update({"status": "unclassified", "updated_at": now}).eq(
+        "contract_address", address
+    ).execute()
+    return {"status": "ok", "contract_address": address, "restored_to": "unclassified"}
+
+
 @router.post("/submissions/{submission_id}/review")
 def review(submission_id: int, body: AdminReviewRequest, client=Depends(get_write_client)):
     """Approve or reject a pending submission. Approving requires a valid category
