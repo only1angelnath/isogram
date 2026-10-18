@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from access import enforce_access
+import memlog
 from db import get_client
 from models import HealthResponse
 from routes import badge, gas, keys, metrics, network, projects, scores, tvl, submit, admin, venues
@@ -67,6 +68,7 @@ async def lifespan(_app: FastAPI):
         interval = 0.0
     if interval >= 30:
         threading.Thread(target=_keep_snapshots_warm, args=(interval,), name="cache-warm", daemon=True).start()
+    memlog.start()
     yield
 
 
@@ -102,7 +104,11 @@ app.add_middleware(
 @app.middleware("http")
 async def rate_limit_headers(request: Request, call_next):
     """Copy the headers access.enforce_access prepared onto the response, errors included."""
-    response = await call_next(request)
+    memlog.request_started()
+    try:
+        response = await call_next(request)
+    finally:
+        memlog.request_finished()
     for name, value in getattr(request.state, "rate_headers", {}).items():
         response.headers.setdefault(name, value)
     return response
