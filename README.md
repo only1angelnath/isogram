@@ -16,8 +16,8 @@ public API. Built for the Arc Mainnet Microgrants program.
 - **Projects:** every contract that shows meaningful activity is discovered
   automatically, classified (DeFi, launchpad, infrastructure, stablecoin, token), and
   shown with the metrics that fit its type. Project owners can propose a contract through
-  `POST /submit`; submissions go to a human review queue and are never listed
-  automatically.
+  `POST /submit` or the `/submit` page; submissions go to a human review queue and are never
+  listed automatically.
 - **TVL and Arc Native Score (DeFi only):** live on-chain balances for DeFi protocols and
   a composite score of gas, users, TVL and contract age, normalised against other DeFi
   protocols. Every project has an SVG badge you can embed; it shows the score for DeFi
@@ -109,16 +109,72 @@ Arc mainnet RPC -> ingestion worker -> per-day rollups -> Postgres (Supabase)
 | `GET /metrics/tokens/daily` | Daily per-token activity |
 | `GET /metrics/contracts/top` | Most active contracts |
 | `GET /venues` | 24h volume per DEX and launch venue (third-party, `?kind=dex` or `launchpad`) |
+| `GET /stats` | Network summary |
 | `GET /projects`, `/projects/{id}` | Tracked projects and detail (token and stablecoin projects include a `market` object) |
+| `GET /projects/by-address/{address}` | Resolve a contract address to its project |
 | `GET /projects/{id}/daily` | Daily metrics for one project |
 | `GET /gas/top`, `/tvl/top`, `/scores/top` | Leaderboards |
+| `GET /gas/{id}`, `/tvl/{id}`, `/scores/{id}` | One project's value |
 | `GET /scores/{id}/history` | Score history for a project |
 | `GET /badge/{id}.svg` | Embeddable score badge |
 | `POST /submit` | Propose a contract for listing (rate-limited, review queue) |
+| `POST /keys` | Self-service API key (returned once, only a hash is stored) |
 
 CORS is open by design: this is a public data API meant to be embedded. Nothing
 authenticates by cookie, `/admin/*` requires an `X-Admin-Key` header, and `/submit` can
 only create a pending row for human review.
+
+### Access tiers and rate limits
+
+Limits are a per-minute sliding window, held per process (the API runs as one instance).
+Every response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Tier`;
+a 429 adds `Retry-After`. An unknown or revoked key is a 401, never a silent downgrade.
+
+| Tier | Identified by | Default limit |
+|---|---|---|
+| Anonymous | client IP | 60 / min |
+| Badge | client IP, `GET /badge/*` | 300 / min |
+| Registered | `X-API-Key: isg_...` | 600 / min |
+| Internal | key listed in `INTERNAL_API_KEYS` (the dashboard server) | 6000 / min |
+| Admin | client IP, `/admin/*` | 30 / min |
+
+Key creation is limited to 5 per IP per day, 100 per day overall and 3 active keys per email.
+
+## Admin desk
+
+`/admin` on the dashboard is the manual curation desk. It has four tabs:
+
+- **Submissions:** review `POST /submit` proposals (approve with a category, or reject), with
+  reply links to the submitter's email or Telegram handle.
+- **Discovered:** contracts found by discovery, as Unclassified, Waiting for promotion or
+  Dismissed. Dismissed contracts can be restored to Unclassified.
+- **Classify:** set a category on any contract by address.
+- **API keys:** list and revoke registered keys.
+
+Admin actions only queue changes; they never insert into `projects`. The next discovery run
+promotes any contract that has a category. A browser never holds the admin key: it calls
+`/api/admin-proxy/*` on the Next.js server, which checks an HMAC-signed session cookie
+(httpOnly, secure, sameSite strict, 12 hours) and then attaches `X-Admin-Key` server-side.
+After 5 wrong passwords from one address in 15 minutes `/api/admin-login` answers 429; the
+counters live in server memory per instance, so a long random `ADMIN_DASHBOARD_PASSWORD` is
+the real protection. Every write route is listed in `ALLOWED_WRITES` in
+`api/tests/test_routes.py`, and the test fails if a new one appears unannounced.
+
+## Environment variables
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | ingestion, scoring, api | Database access |
+| `ARC_RPC_URL` | ingestion, scoring | Free shared RPC, last in the pool |
+| `ALCHEMY_ARC_RPC_URL`, `DRPC_ARC_RPC_URL`, `QUICKNODE_ARC_RPC_URL`, `BLOCKDAEMON_ARC_RPC_URL`, `BLOCKDAEMON_API_KEY` | ingestion, scoring | Dedicated RPC endpoints, tried first |
+| `COINGECKO_PRO_API_KEY` | ingestion | Discovery and market data |
+| `RPC_CONCURRENCY`, `BATCH_BLOCKS`, `MAX_BLOCKS_PER_RUN`, `RUN_TIME_BUDGET_SECONDS`, `FOLLOW_TIP`, `TIP_POLL_SECONDS` | ingestion | Run tuning (defaults are set in the workflow) |
+| `ADMIN_API_KEY` | api, dashboard | Gates `/admin/*`; the dashboard also uses it to sign the session cookie |
+| `ADMIN_DASHBOARD_PASSWORD` | dashboard | Admin sign-in password |
+| `INTERNAL_API_KEYS` | api | Comma-separated keys that get the internal tier |
+| `ANON_LIMIT_PER_MIN`, `BADGE_LIMIT_PER_MIN`, `KEY_LIMIT_PER_MIN`, `INTERNAL_LIMIT_PER_MIN`, `ADMIN_LIMIT_PER_MIN` | api | Optional limit overrides |
+| `WARM_CACHE_SECONDS` | api | Optional cache keep-warm interval |
+| `API_BASE_URL`, `API_KEY` | dashboard | API address, and the internal key it sends |
 
 ## Run it locally
 
@@ -157,7 +213,7 @@ cd scoring && python -m pytest -q
 | `ingestion/` | Chain follower, per-day rollups, contract discovery, admin tools |
 | `scoring/` | Segments, TVL, and the Arc Native Score job |
 | `api/` | FastAPI service (public reads, `/submit`, `/admin`) |
-| `dashboard/` | Next.js dashboard |
+| `dashboard/` | Next.js dashboard, `/submit` page, `/admin` curation desk, `sitemap.xml` and `robots.txt` |
 | `supabase/migrations/` | Postgres schema and SQL functions |
 | `ops/` | One-off SQL used during backfills |
 | `.github/workflows/` | Ingestion chain and scoring schedule |
